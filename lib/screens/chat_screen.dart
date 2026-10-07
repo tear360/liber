@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:matrix/matrix.dart';
 
@@ -8,8 +9,8 @@ import '../theme.dart';
 import '../widgets/avatar.dart';
 import '../widgets/message_bubble.dart';
 
-/// The conversation screen: WhatsApp's wallpaper, message run grouping,
-/// day separators and the composer with its morphing send button.
+/// The conversation screen: green header, WhatsApp's beige wallpaper, message
+/// run grouping, day separators and the composer with its send button.
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key, required this.room});
 
@@ -25,7 +26,9 @@ class _ChatScreenState extends State<ChatScreen> {
   final _focusNode = FocusNode();
 
   Timeline? _timeline;
+  String? _error;
   bool _sending = false;
+  bool _joining = false;
   bool _loadingMore = false;
 
   Room get room => widget.room;
@@ -34,7 +37,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _composerController.addListener(() => setState(() {}));
-    unawaited(_openTimeline());
+    _openTimeline();
   }
 
   @override
@@ -46,7 +49,23 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _openTimeline() async {
+    setState(() {
+      _error = null;
+      _timeline = null;
+    });
+
     try {
+      // An invitation must be accepted before the server serves any event;
+      // without this the screen stays empty forever.
+      if (room.membership == Membership.invite) {
+        setState(() => _joining = true);
+        try {
+          await room.join();
+        } finally {
+          if (mounted) setState(() => _joining = false);
+        }
+      }
+
       final timeline = await room.getTimeline(
         onNewEvent: () => _refresh(),
         onUpdate: () => _refresh(),
@@ -60,16 +79,18 @@ class _ChatScreenState extends State<ChatScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
+      setState(() => _error = e.toString());
     }
   }
 
   Future<void> _markRead() async {
     final id = room.lastEvent?.eventId;
     if (id == null) return;
-    await room.setReadMarker(id, mRead: id);
+    try {
+      await room.setReadMarker(id, mRead: id);
+    } catch (_) {
+      // Best effort: a failed receipt must not disturb the conversation.
+    }
   }
 
   void _refresh() {
@@ -84,6 +105,9 @@ class _ChatScreenState extends State<ChatScreen> {
     _loadingMore = true;
     try {
       await timeline.requestHistory();
+      if (mounted) setState(() {});
+    } catch (_) {
+      // Keep the conversation usable if pagination hiccups.
     } finally {
       _loadingMore = false;
     }
@@ -170,93 +194,142 @@ class _ChatScreenState extends State<ChatScreen> {
     final isGroup = !room.isDirectChat;
     final participants = room.getParticipants();
 
-    return Scaffold(
-      backgroundColor: WaPalette.wallpaper,
-      appBar: AppBar(
-        titleSpacing: 0,
-        title: Row(
-          children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back),
-              padding: EdgeInsets.zero,
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            MatrixAvatar(
-              name: title,
-              avatarUri: room.avatar,
-              client: client,
-              size: 38,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 1),
-                  Text(
-                    isGroup
-                        ? '${participants.length} participants'
-                        : (room.typingUsers.isNotEmpty
-                            ? 'en train d\'écrire…'
-                            : (room.directChatMatrixID ?? client.userID ?? '')),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12.5,
-                      color: Color(0xFFD6EFE8),
-                    ),
-                  ),
-                ],
+    // The conversation screen keeps WhatsApp's green header; only the main
+    // tabs moved to the light 2025 header.
+    return Theme(
+      data: Theme.of(context).copyWith(
+        appBarTheme: const AppBarTheme(
+          backgroundColor: WaPalette.primary,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          centerTitle: false,
+          titleTextStyle: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+          ),
+          systemOverlayStyle: SystemUiOverlayStyle(
+            statusBarColor: WaPalette.primary,
+            statusBarIconBrightness: Brightness.light,
+            statusBarBrightness: Brightness.dark,
+          ),
+        ),
+      ),
+      child: Scaffold(
+        backgroundColor: WaPalette.wallpaper,
+        appBar: AppBar(
+          titleSpacing: 0,
+          title: Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back),
+                padding: EdgeInsets.zero,
+                onPressed: () => Navigator.of(context).pop(),
               ),
+              MatrixAvatar(
+                name: title,
+                avatarUri: room.avatar,
+                client: client,
+                size: 38,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      isGroup
+                          ? '${participants.length} participants'
+                          : (room.typingUsers.isNotEmpty
+                              ? 'en train d\'écrire…'
+                              : (room.directChatMatrixID ??
+                                  client.userID ??
+                                  '')),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        color: Color(0xFFD6EFE8),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.call_outlined),
+              tooltip: 'Appel',
+              onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content:
+                      Text("Les appels ne sont pas encore pris en charge."),
+                ),
+              ),
+            ),
+            PopupMenuButton<String>(
+              onSelected: (value) {
+                if (value == 'leave') _leave();
+              },
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'info',
+                  child: Text(
+                    isGroup ? 'Informations du salon' : 'Informations de contact',
+                  ),
+                ),
+                const PopupMenuItem(value: 'leave', child: Text('Quitter')),
+              ],
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.call_outlined),
-            tooltip: 'Appel',
-            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text("Les appels ne sont pas encore pris en charge."),
-              ),
-            ),
-          ),
-          PopupMenuButton<String>(
-            onSelected: (value) {
-              if (value == 'leave') _leave();
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: 'info',
-                child: Text(
-                  isGroup ? 'Informations du salon' : 'Informations de contact',
-                ),
-              ),
-              const PopupMenuItem(value: 'leave', child: Text('Quitter')),
-            ],
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(child: _buildBody()),
-          _buildComposer(),
-        ],
+        body: Column(
+          children: [
+            Expanded(child: _buildBody()),
+            _buildComposer(),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildBody() {
+    if (_error != null) {
+      return _ChatIssue(
+        message: _error!,
+        canRetry: room.membership != Membership.ban,
+        onRetry: _openTimeline,
+      );
+    }
+    if (_joining) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(color: WaPalette.primary),
+            SizedBox(height: 14),
+            Text(
+              'Acceptation de l\'invitation…',
+              style: TextStyle(color: WaPalette.textSecondary),
+            ),
+          ],
+        ),
+      );
+    }
+
     final timeline = _timeline;
     if (timeline == null) {
       return const Center(child: CircularProgressIndicator());
@@ -432,11 +505,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final diff = today.difference(day).inDays;
     if (diff <= 0) return "AUJOURD'HUI";
     if (diff == 1) return 'HIER';
-    if (diff < 7) return DateFormat.EEEE('fr').format(day).toUpperCase();
+    if (diff < 7) return DateFormat.EEEE().format(day).toUpperCase();
     if (day.year == now.year) {
-      return DateFormat('d MMMM', 'fr').format(day).toUpperCase();
+      return DateFormat('d MMMM').format(day).toUpperCase();
     }
-    return DateFormat.yMMMMd('fr').format(day).toUpperCase();
+    return DateFormat.yMMMMd().format(day).toUpperCase();
   }
 
   /// Stable per-sender hue so group members are easy to tell apart.
@@ -536,6 +609,68 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Explains why the conversation could not open instead of leaving a grey
+/// void, with a retry for transient failures.
+class _ChatIssue extends StatelessWidget {
+  const _ChatIssue({
+    required this.message,
+    required this.canRetry,
+    required this.onRetry,
+  });
+
+  final String message;
+  final bool canRetry;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.chat_bubble_outline,
+              size: 48,
+              color: WaPalette.textSecondary,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Salon indisponible',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
+                color: WaPalette.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              maxLines: 6,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 13.5,
+                color: WaPalette.textSecondary,
+                height: 1.4,
+              ),
+            ),
+            if (canRetry) ...[
+              const SizedBox(height: 18),
+              FilledButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Réessayer'),
+              ),
+            ],
           ],
         ),
       ),

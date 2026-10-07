@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:matrix/matrix.dart';
 
 import '../matrix/matrix_service.dart';
 import '../theme.dart';
+import 'account_tab.dart';
 import 'chat_screen.dart';
+import 'chats_tab.dart';
 import 'communities_tab.dart';
 import 'login_screen.dart';
-import 'settings_screen.dart';
-import 'chats_tab.dart';
 
-/// The main shell: a green app bar with the WhatsApp tab strip underneath.
+/// The main shell, laid out like WhatsApp's 2025 refresh: a light header with
+/// the title and camera-style actions, then a bottom navigation bar of icons
+/// with labels.
 ///
-/// Discussions and Communautés are live Matrix views; Appels is an honest
-/// empty state until call events are surfaced.
+/// Discussions, Communautés and Compte are live Matrix views; Appels is an
+/// honest empty state until call events are surfaced.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -19,25 +22,28 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tabController;
+class _HomeScreenState extends State<HomeScreen> {
+  int _tab = 0;
 
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 3, vsync: this);
-  }
+  MatrixService get _service => MatrixService.instance;
 
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
+  /// Unjoined rooms that belong to at least one space: they surface only in
+  /// Communautés, like WhatsApp keeps community channels out of Chats.
+  Set<String> _spaceRoomIds(Client? client) {
+    if (client == null) return const {};
+    final ids = <String>{};
+    for (final space in client.rooms) {
+      if (!space.isSpace || space.membership == Membership.leave) continue;
+      for (final child in space.spaceChildren) {
+        final roomId = child.roomId;
+        if (roomId != null) ids.add(roomId);
+      }
+    }
+    return ids;
   }
 
   Future<void> _newDiscussion() async {
-    final service = MatrixService.instance;
-    final client = service.client;
+    final client = _service.client;
     if (client == null) return;
 
     final controller = TextEditingController();
@@ -95,74 +101,7 @@ class _HomeScreenState extends State<HomeScreen>
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _openSettings() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: WaPalette.surface,
-      appBar: AppBar(
-        title: const Text('Liber'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.search),
-            tooltip: 'Rechercher',
-            onPressed: () => _snack('Recherche : utilisez la barre des discussions.'),
-          ),
-          PopupMenuButton<String>(
-            onSelected: (value) {
-              switch (value) {
-                case 'new':
-                  _newDiscussion();
-                case 'settings':
-                  _openSettings();
-                case 'logout':
-                  _confirmLogout();
-              }
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(value: 'new', child: Text('Nouvelle discussion')),
-              PopupMenuItem(value: 'settings', child: Text('Paramètres')),
-              PopupMenuItem(value: 'logout', child: Text('Se déconnecter')),
-            ],
-          ),
-        ],
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(text: 'Discussions'),
-            Tab(text: 'Communautés'),
-            Tab(text: 'Appels'),
-          ],
-        ),
-      ),
-      floatingActionButton: _tabController.index == 0
-          ? FloatingActionButton(
-              onPressed: _newDiscussion,
-              tooltip: 'Nouvelle discussion',
-              child: const Icon(Icons.chat, size: 26),
-            )
-          : null,
-      body: Listener(
-        onPointerDown: (_) => setState(() {}),
-        child: TabBarView(
-          controller: _tabController,
-          children: [
-            ChatsTab(onOpenSettings: _openSettings),
-            const CommunitiesTab(),
-            const _CallsTab(),
-          ],
-        ),
-      ),
-    );
-  }
-
   Future<void> _confirmLogout() async {
-    final service = MatrixService.instance;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -185,12 +124,129 @@ class _HomeScreenState extends State<HomeScreen>
     );
     if (confirmed != true) return;
 
-    await service.logout();
+    await _service.logout();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute<void>(builder: (_) => const LoginScreen()),
       (route) => false,
     );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final client = _service.client;
+
+    return Scaffold(
+      backgroundColor: WaPalette.surface,
+      appBar: AppBar(
+        title: Text(
+          const ['Liber', 'Communautés', 'Appels', 'Compte'][_tab],
+        ),
+        actions: [
+          if (_tab == 0) ...[
+            IconButton(
+              icon: const Icon(Icons.photo_camera_outlined),
+              tooltip: 'Caméra',
+              onPressed: () => _snack(
+                "La caméra arrive dans une prochaine version.",
+              ),
+            ),
+            PopupMenuButton<String>(
+              onSelected: (value) {
+                switch (value) {
+                  case 'new':
+                    _newDiscussion();
+                  case 'logout':
+                    _confirmLogout();
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(value: 'new', child: Text('Nouvelle discussion')),
+                PopupMenuItem(value: 'logout', child: Text('Se déconnecter')),
+              ],
+            ),
+          ] else
+            PopupMenuButton<String>(
+              onSelected: (value) {
+                if (value == 'logout') _confirmLogout();
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(value: 'logout', child: Text('Se déconnecter')),
+              ],
+            ),
+        ],
+      ),
+      floatingActionButton: _tab == 0
+          ? FloatingActionButton(
+              onPressed: _newDiscussion,
+              tooltip: 'Nouvelle discussion',
+              child: const Icon(Icons.chat, size: 26),
+            )
+          : null,
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tab,
+        onDestinationSelected: (index) => setState(() => _tab = index),
+        backgroundColor: WaPalette.surface,
+        indicatorColor: Colors.transparent,
+        height: 64,
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        destinations: [
+          NavigationDestination(
+            icon: ListenableBuilder(
+              listenable: _service,
+              builder: (context, _) {
+                final unread = _totalUnreadChats(client);
+                return Badge(
+                  isLabelVisible: unread > 0,
+                  label: Text('$unread'),
+                  child: const Icon(Icons.chat_bubble_outline),
+                );
+              },
+            ),
+            selectedIcon: const Icon(Icons.chat_bubble),
+            label: 'Discussions',
+          ),
+          NavigationDestination(
+            icon: const Icon(Icons.groups_outlined),
+            selectedIcon: const Icon(Icons.groups),
+            label: 'Communautés',
+          ),
+          NavigationDestination(
+            icon: const Icon(Icons.call_outlined),
+            selectedIcon: const Icon(Icons.call),
+            label: 'Appels',
+          ),
+          NavigationDestination(
+            icon: const Icon(Icons.person_outline),
+            selectedIcon: const Icon(Icons.person),
+            label: 'Compte',
+          ),
+        ],
+      ),
+      body: IndexedStack(
+        index: _tab,
+        children: [
+          ChatsTab(spaceOnlyRoomIds: _spaceRoomIds(client)),
+          const CommunitiesTab(),
+          const _CallsTab(),
+          const AccountTab(),
+        ],
+      ),
+    );
+  }
+
+  /// WhatsApp's Chats tab badge: rooms with unread messages or invites,
+  /// excluding space-only rooms and spaces themselves.
+  int _totalUnreadChats(Client? client) {
+    if (client == null) return 0;
+    final spaceOnly = _spaceRoomIds(client);
+    return client.rooms
+        .where((room) =>
+            room.membership != Membership.leave &&
+            !room.isSpace &&
+            !spaceOnly.contains(room.id) &&
+            room.isUnreadOrInvited)
+        .length;
   }
 }
 

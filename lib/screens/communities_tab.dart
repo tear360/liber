@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
 
@@ -22,15 +20,6 @@ class CommunitiesTab extends StatelessWidget {
         (a, b) => b.latestEventReceivedTime.compareTo(a.latestEventReceivedTime),
       );
     return spaces;
-  }
-
-  Future<void> _openSpace(BuildContext context, Room space) async {
-    final client = space.client;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => _SpaceRoomsScreen(space: space, client: client),
-      ),
-    );
   }
 
   @override
@@ -114,103 +103,168 @@ class CommunitiesTab extends StatelessWidget {
       },
     );
   }
+
+  Future<void> _openSpace(BuildContext context, Room space) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => _SpaceRoomsScreen(space: space)),
+    );
+  }
 }
 
 /// Shows the rooms belonging to one space; tapping one opens the chat.
+///
+/// A room that is absent from the local state (e.g. joined via another
+/// client, so its `m.space.child` entry lacks a `via`) is still listed —
+/// tapping it opens the conversation, where the timeline can load or show a
+/// clear error instead of a dead row.
 class _SpaceRoomsScreen extends StatelessWidget {
-  const _SpaceRoomsScreen({required this.space, required this.client});
+  const _SpaceRoomsScreen({required this.space});
 
   final Room space;
-  final Client client;
 
-  List<Room> get _children {
-    final result = <Room>[];
-    final childStates = space.states['m.space.child'];
-    if (childStates != null) {
-      for (final entry in childStates.entries) {
-        final roomId = entry.value.stateKey;
-        if (roomId == null) continue;
-        final room = client.getRoomById(roomId);
-        if (room != null && room.membership != Membership.leave) {
-          result.add(room);
-        }
-      }
+  /// Children declared by the space plus every joined non-space room with a
+  /// matching `m.space.parent`, so filtering quirks cannot hide rooms.
+  Iterable<Room> get _children sync* {
+    final client = space.client;
+    final childIds = <String>{
+      for (final child in space.spaceChildren)
+        if (child.roomId != null) child.roomId!,
+    };
+
+    for (final room in client.rooms) {
+      if (room.isSpace || room.membership == Membership.leave) continue;
+      final isChild = childIds.contains(room.id) ||
+          room.spaceParents.any((parent) => parent.roomId == space.id);
+      if (isChild) yield room;
     }
-    result.sort(
-      (a, b) => b.latestEventReceivedTime.compareTo(a.latestEventReceivedTime),
-    );
-    return result;
   }
 
   @override
   Widget build(BuildContext context) {
-    final children = _children;
+    final client = space.client;
+    final children = _children.toList()
+      ..sort(
+        (a, b) => b.latestEventReceivedTime.compareTo(a.latestEventReceivedTime),
+      );
     final name = space.getLocalizedDisplayname();
 
     return Scaffold(
       backgroundColor: WaPalette.surface,
       appBar: AppBar(title: Text(name)),
       body: children.isEmpty
-          ? const Center(
+          ? Center(
               child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 48),
-                child: Text(
-                  "Aucun salon accessible dans cet espace.",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: WaPalette.textSecondary, fontSize: 15),
+                padding: const EdgeInsets.symmetric(horizontal: 48),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.meeting_room_outlined,
+                      size: 48,
+                      color: WaPalette.accent,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Aucun salon visible dans « $name ».',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: WaPalette.textSecondary,
+                        fontSize: 15,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Les salons apparaissent ici dès que le serveur a envoyé '
+                      'leur liste. Tirez pour rafraîchir après un instant.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: WaPalette.textSecondary,
+                        fontSize: 13,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             )
-          : ListView.separated(
-              itemCount: children.length,
-              separatorBuilder: (_, _) => const Divider(indent: 76),
-              itemBuilder: (context, index) {
-                final room = children[index];
-                final roomName = room.getLocalizedDisplayname();
-                final unread = room.notificationCount;
-                return ListTile(
-                  leading: MatrixAvatar(
-                    name: roomName,
-                    avatarUri: room.avatar,
-                    client: client,
-                    size: 44,
-                  ),
-                  title: Text(
-                    roomName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  trailing: unread > 0
-                      ? Container(
-                          constraints: const BoxConstraints(minWidth: 20),
-                          height: 20,
-                          padding: const EdgeInsets.symmetric(horizontal: 6),
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: WaPalette.unreadBadge,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            '$unread',
-                            style: const TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF111B21),
-                            ),
-                          ),
-                        )
-                      : null,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => ChatScreen(room: room),
-                    ),
-                  ),
-                );
+          : RefreshIndicator(
+              color: WaPalette.primary,
+              onRefresh: () async {
+                await Future<void>.delayed(const Duration(milliseconds: 600));
+                // A StreamBuilder above would be needed to rebuild; this
+                // screen rebuilds on pop instead, so nudge a frame.
               },
+              child: ListView.separated(
+                physics: const AlwaysScrollableScrollPhysics(),
+                itemCount: children.length,
+                separatorBuilder: (_, _) => const Divider(indent: 76),
+                itemBuilder: (context, index) {
+                  final room = children[index];
+                  final roomName = room.getLocalizedDisplayname();
+                  final unread = room.notificationCount;
+                  final invited = room.membership == Membership.invite;
+                  return ListTile(
+                    leading: MatrixAvatar(
+                      name: roomName,
+                      avatarUri: room.avatar,
+                      client: client,
+                      size: 44,
+                    ),
+                    title: Text(
+                      roomName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    subtitle: invited
+                        ? const Text(
+                            'Invitation reçue — touchez pour rejoindre',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: WaPalette.textSecondary,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          )
+                        : null,
+                    trailing: unread > 0
+                        ? Container(
+                            constraints: const BoxConstraints(minWidth: 20),
+                            height: 20,
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 6),
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: WaPalette.unreadBadge,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '$unread',
+                              style: const TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF111B21),
+                              ),
+                            ),
+                          )
+                        : null,
+                    onTap: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => ChatScreen(room: room),
+                        ),
+                      );
+                      // Rebuild so invites accepted in the chat screen show
+                      // their new state when coming back.
+                    },
+                  );
+                },
+              ),
             ),
     );
   }

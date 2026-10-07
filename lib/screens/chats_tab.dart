@@ -11,10 +11,19 @@ import 'chat_screen.dart';
 
 /// The WhatsApp conversation list, driven straight off [Client.onSync] so a
 /// new message reorders the rows without a manual refresh.
+///
+/// [spaceOnlyRoomIds] carries the rooms that belong to a joined space: they
+/// surface in Communautés only, like WhatsApp keeps community channels out of
+/// the Chats list.
 class ChatsTab extends StatefulWidget {
-  const ChatsTab({super.key, required this.onOpenSettings});
+  const ChatsTab({
+    super.key,
+    required this.spaceOnlyRoomIds,
+    this.onOpenSettings,
+  });
 
-  final VoidCallback onOpenSettings;
+  final Set<String> spaceOnlyRoomIds;
+  final VoidCallback? onOpenSettings;
 
   @override
   State<ChatsTab> createState() => _ChatsTabState();
@@ -99,11 +108,14 @@ class _ChatsTabState extends State<ChatsTab>
     }
   }
 
+  /// Every conversation the account can see, including invitations. Rooms that
+  /// only exist inside a joined space stay out of the list.
   List<Room> _visibleRooms(Client client) {
     final rooms = List<Room>.from(client.rooms);
     rooms.retainWhere((room) {
       if (room.membership == Membership.leave) return false;
       if (room.isSpace) return false;
+      if (widget.spaceOnlyRoomIds.contains(room.id)) return false;
       if (_query.isEmpty) return true;
       return room.getLocalizedDisplayname().toLowerCase().contains(_query) ||
           (room.lastEvent?.body.toLowerCase().contains(_query) ?? false);
@@ -150,7 +162,21 @@ class _ChatsTabState extends State<ChatsTab>
                   stream: client.onSync.stream,
                   builder: (context, snapshot) {
                     final rooms = _visibleRooms(client);
-                    if (rooms.isEmpty) return _EmptyChats(query: _query);
+
+                    // Between login and the first completed sync the room list
+                    // is still empty: show a spinner, not a wrong "no chats".
+                    final waitingForFirstSync =
+                        rooms.isEmpty && !snapshot.hasData;
+
+                    if (rooms.isEmpty) {
+                      return waitingForFirstSync
+                          ? const Center(
+                              child: CircularProgressIndicator(
+                                color: WaPalette.primary,
+                              ),
+                            )
+                          : _EmptyChats(query: _query);
+                    }
                     return RefreshIndicator(
                       color: WaPalette.primary,
                       onRefresh: () async {

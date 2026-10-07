@@ -37,6 +37,10 @@ abstract final class WaPalette {
   static const Color composerField = Color(0xFFF0F2F5);
   static const Color incomingTimestamp = Color(0xFF667781);
 
+  /// Bottom navigation: selected icon/label, unselected icon/label.
+  static const Color navSelected = Color(0xFF103529);
+  static const Color navUnselected = Color(0xFF54656F);
+
   /// Colours a call can take to stand in for a missing avatar.
   static const List<Color> avatarPalette = <Color>[
     Color(0xFFE542A0),
@@ -65,30 +69,31 @@ ThemeData buildLiberTheme() {
   );
 
   return base.copyWith(
+    // WhatsApp's 2025 layout: light header, dark text, green accents.
     appBarTheme: const AppBarTheme(
-      backgroundColor: WaPalette.primary,
-      foregroundColor: Colors.white,
+      backgroundColor: WaPalette.surface,
+      foregroundColor: WaPalette.textPrimary,
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
       titleTextStyle: TextStyle(
-        fontSize: 19,
-        fontWeight: FontWeight.w600,
-        color: Colors.white,
-        letterSpacing: 0.1,
+        fontSize: 22,
+        fontWeight: FontWeight.w700,
+        color: WaPalette.textPrimary,
+        letterSpacing: -0.3,
       ),
       systemOverlayStyle: SystemUiOverlayStyle(
-        statusBarColor: WaPalette.primary,
-        statusBarIconBrightness: Brightness.light,
-        statusBarBrightness: Brightness.dark,
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
       ),
     ),
     tabBarTheme: const TabBarThemeData(
-      labelColor: Colors.white,
-      unselectedLabelColor: Color(0xFFB0D9CF),
+      labelColor: WaPalette.primary,
+      unselectedLabelColor: WaPalette.textSecondary,
       labelStyle: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
       unselectedLabelStyle: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
-      indicatorColor: Colors.white,
+      indicatorColor: WaPalette.primary,
       indicatorSize: TabBarIndicatorSize.label,
       dividerColor: Colors.transparent,
     ),
@@ -151,10 +156,18 @@ ThemeData buildLiberTheme() {
             : const Color(0xFFD9DBDD),
       ),
     ),
+    chipTheme: ChipThemeData(
+      backgroundColor: WaPalette.composerField,
+      selectedColor: const Color(0xFFD3F4E5),
+      showCheckmark: false,
+      labelStyle: const TextStyle(fontSize: 13.5),
+      side: BorderSide.none,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+    ),
     bottomNavigationBarTheme: const BottomNavigationBarThemeData(
       backgroundColor: WaPalette.surface,
-      selectedItemColor: WaPalette.primary,
-      unselectedItemColor: WaPalette.textSecondary,
+      selectedItemColor: WaPalette.navSelected,
+      unselectedItemColor: WaPalette.navUnselected,
     ),
     pageTransitionsTheme: const PageTransitionsTheme(
       builders: <TargetPlatform, PageTransitionsBuilder>{
