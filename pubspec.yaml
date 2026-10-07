@@ -1,0 +1,47 @@
+name: liber
+description: "Liber — client Matrix pour Android, interface inspiree de WhatsApp"
+publish_to: 'none'
+
+# versionName = 1.0.0, versionCode = 1.
+# The auto-updater compares the Git tag (v1.0.1) against `version` below.
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # Matrix client protocol implementation (sync, rooms, timeline).
+  matrix: ^13.0.0
+  # Native Rust bindings giving matrix its end-to-end encryption.
+  flutter_vodozemac: ^0.8.1
+
+  # Persistent store backing MatrixSdkDatabase.
+  sqflite: ^2.4.4+1
+  path: ^1.9.1
+  path_provider: ^2.1.6
+
+  # Persisted user preferences (homeserver, update opt-out).
+  shared_preferences: ^2.5.6
+
+  # Reading the running app version for update comparison.
+  package_info_plus: ^10.2.2
+  # GitHub Releases API call while checking for updates.
+  http: ^1.6.0
+  # Launching the Android package installer for a downloaded APK.
+  open_filex: ^4.7.0
+
+  # Timestamp and date formatting in the chat timeline.
+  intl: ^0.20.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

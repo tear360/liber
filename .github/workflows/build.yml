@@ -1,0 +1,115 @@
+name: Android
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.6
+          cache: true
+
+      - name: Restore the release keystore
+        # Without secrets the build still succeeds, just debug-signed, so a
+        # fork can run CI without access to our key.
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KS_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::warning::No keystore secrets found; this APK will be debug-signed and cannot be installed over a previous release."
+            exit 0
+          fi
+          printf '%s' "$KS_B64" | base64 -d > android/app/upload-keystore.jks
+          {
+            echo "storePassword=$KS_PASSWORD"
+            echo "keyPassword=$KS_KEY_PASSWORD"
+            echo "keyAlias=$KS_ALIAS"
+            echo "storeFile=upload-keystore.jks"
+          } > android/key.properties
+          echo "Release signing configured."
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Resolve the version to publish
+        id: version
+        run: |
+          REF="${GITHUB_REF_NAME:-}"
+          if [[ "$REF" == v* ]]; then
+            NAME="${REF#v}"
+          else
+            NAME="$(grep -E '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)"
+          fi
+          # versionCode must strictly increase for Android to accept the
+          # in-app update, so it is derived from the run number instead of
+          # being recomputed from the tag.
+          CODE=$((1000000 + GITHUB_RUN_NUMBER))
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Publishing $NAME (versionCode $CODE)"
+
+      - name: Build release APK
+        run: |
+          flutter build apk --release \
+            --build-name "${{ steps.version.outputs.name }}" \
+            --build-number "${{ steps.version.outputs.code }}"
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             "liber-${{ steps.version.outputs.name }}.apk"
+          ls -lh "liber-${{ steps.version.outputs.name }}.apk"
+
+      - name: Verify the APK is a valid Android package
+        run: |
+          APK="liber-${{ steps.version.outputs.name }}.apk"
+          unzip -l "$APK" | grep -q 'classes.dex'
+          test "$(unzip -p "$APK" AndroidManifest.xml | wc -c)" -gt 0
+          echo "APK contents look sane."
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: liber-${{ steps.version.outputs.name }}
+          path: liber-*.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        # Only tagged builds become releases; the in-app updater reads
+        # /releases/latest, so this is what makes auto-update work.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Liber ${{ steps.version.outputs.name }}
+          files: liber-*.apk
+          generate_release_notes: true
+          fail_on_unmatched_files: true
