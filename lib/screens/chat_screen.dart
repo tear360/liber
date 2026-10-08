@@ -362,69 +362,78 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Renders events defensively: one malformed event (missing sender,
+  /// redaction race…) must never blank the whole screen — that was the
+  /// "black screen after 2 s" bug. A bad event is skipped and logged instead
+  /// of throwing through the build method.
   List<Widget> _renderMessages(List<Event> events) {
     final widgets = <Widget>[];
-    final ownId = room.client.userID;
+    final ownId = room.client.userID ?? '';
     DateTime? lastDay;
     Event? previous;
 
     for (final event in events) {
       final kind = _classify(event);
-      if (kind == _EventKind.hidden) {
-        continue;
-      }
+      if (kind == _EventKind.hidden) continue;
 
-      final ts = event.originServerTs;
-      final day = DateTime(ts.year, ts.month, ts.day);
-      if (lastDay == null || day != lastDay) {
-        widgets.add(DaySeparator(label: _dayLabel(day)));
-        previous = null;
-      }
-      lastDay = day;
+      try {
+        final ts = event.originServerTs;
+        final day = DateTime(ts.year, ts.month, ts.day);
+        final isNewDay = lastDay == null || day != lastDay;
 
-      if (kind == _EventKind.system) {
-        final text = _systemText(event);
-        if (text.isNotEmpty) {
-          widgets.add(
-            MessageBubble(
-              body: text,
-              isMine: false,
-              timestamp: ts,
-              isSystem: true,
-            ),
+        Widget? systemNotice;
+        if (kind == _EventKind.system) {
+          final text = _systemText(event);
+          if (text.isEmpty) continue;
+          systemNotice = MessageBubble(
+            body: text,
+            isMine: false,
+            timestamp: ts,
+            isSystem: true,
           );
         }
-        previous = null;
-        continue;
+
+        if (isNewDay) {
+          widgets.add(DaySeparator(label: _dayLabel(day)));
+          previous = null;
+          lastDay = day;
+        }
+
+        if (systemNotice != null) {
+          widgets.add(systemNotice);
+          previous = null;
+          continue;
+        }
+
+        final senderId = event.senderId;
+        final isMine = senderId == ownId;
+        final startsRun =
+            previous == null ||
+            previous.senderId != senderId ||
+            ts.difference(previous.originServerTs) >
+                const Duration(minutes: 5);
+
+        final group =
+            !room.isDirectChat && startsRun && !isMine && events.length > 1;
+
+        widgets.add(
+          MessageBubble(
+            body: _bubbleBody(event),
+            isMine: isMine,
+            timestamp: ts,
+            showTail: startsRun,
+            senderName: group
+                ? (event.senderFromMemoryOrFallback.displayName ?? senderId)
+                : null,
+            senderColor: _senderColor(senderId),
+            status: event.status,
+            failed: event.status == EventStatus.error,
+          ),
+        );
+        previous = event;
+      } catch (e, s) {
+        Logs().w('[Liber] Skipping unrenderable event ${event.eventId}', e, s);
       }
-
-      final isMine = event.senderId == ownId;
-      final gap = previous == null
-          ? const Duration(days: 1)
-          : ts.difference(previous.originServerTs);
-      final startsRun =
-          previous == null ||
-          previous.senderId != event.senderId ||
-          gap > const Duration(minutes: 5);
-
-      final group =
-          !room.isDirectChat && startsRun && !isMine && events.length > 1;
-
-      widgets.add(
-        MessageBubble(
-          body: _bubbleBody(event),
-          isMine: isMine,
-          timestamp: ts,
-          showTail: startsRun,
-          senderName: group
-              ? event.senderFromMemoryOrFallback.displayName ?? event.senderId
-              : null,
-          senderColor: _senderColor(event.senderId),
-          status: event.status,
-          failed: event.status == EventStatus.error,
-        ),
-      );
-      previous = event;
     }
 
     return widgets;
@@ -514,6 +523,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Stable per-sender hue so group members are easy to tell apart.
   static Color _senderColor(String userId) {
+    if (userId.isEmpty) return WaPalette.avatarPalette.first;
     var hash = 0;
     for (var i = 0; i < userId.length; i++) {
       hash = (hash * 31 + userId.codeUnitAt(i)) & 0x7fffffff;

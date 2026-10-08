@@ -1,11 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 
 import '../matrix/matrix_service.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
+import 'verification_screen.dart';
 
 /// The Compte tab: avatar, profile fields, device/session details and
 /// encryption status — everything identifying this account at a glance.
@@ -250,6 +252,8 @@ class _AccountTabState extends State<AccountTab> {
                     : const Color(0xFFE0902B),
               ),
             ),
+            const Divider(indent: 56),
+            _VerificationTile(),
           ],
         ),
         const SizedBox(height: 12),
@@ -296,6 +300,87 @@ class _AccountTabState extends State<AccountTab> {
   }
 }
 
+class _VerificationTile extends StatefulWidget {
+  @override
+  State<_VerificationTile> createState() => _VerificationTileState();
+}
+
+class _VerificationTileState extends State<_VerificationTile> {
+  bool _busy = false;
+
+  /// Cross-signing is usable only when both the crypto stack and the
+  /// account's cross-signing keys are in place; otherwise the tile hides.
+  bool _verificationAvailable(Client client) {
+    final encryption = client.encryption;
+    if (encryption == null || client.userID == null) return false;
+    final keyList = client.userDeviceKeys[client.userID!];
+    return keyList != null;
+  }
+
+  Future<void> _startSelfVerification() async {
+    final client = MatrixService.instance.client;
+    if (client == null || _busy) return;
+
+    setState(() => _busy = true);
+    KeyVerification? request;
+    try {
+      final keyList = client.userDeviceKeys[client.userID!];
+      if (keyList == null) throw Exception('Clés du compte indisponibles.');
+      request = await keyList.startVerification();
+      request.onUpdate = () {};
+      if (!mounted) return;
+      await VerificationScreen.open(context, request);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Vérification impossible : '
+              '${MatrixService.describeMatrixError(e)}',
+            ),
+          ),
+        );
+      }
+      try {
+        await request?.cancel('m.user', true);
+      } catch (_) {}
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final client = MatrixService.instance.client;
+    if (client == null || !_verificationAvailable(client)) {
+      return const SizedBox.shrink();
+    }
+    final verified =
+        client.userDeviceKeys[client.userID!]?.verified ==
+        UserVerifiedStatus.verified;
+
+    return _InfoTile(
+      icon: verified ? Icons.verified : Icons.gpp_maybe_outlined,
+      title: 'Vérifier cet appareil',
+      subtitle: verified
+          ? 'Cet appareil est vérifié. Vous pouvez revérifier à tout moment.'
+          : 'Confirmez que cet appareil est bien le vôtre pour débloquer les '
+              'messages chiffrés.',
+      trailing: _busy
+          ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Icon(
+              Icons.chevron_right,
+              color: verified ? WaPalette.accent : const Color(0xFFE0902B),
+            ),
+      onTap: _busy ? null : _startSelfVerification,
+    );
+  }
+}
+
 class _Section extends StatelessWidget {
   const _Section({required this.children, this.title});
 
@@ -335,16 +420,19 @@ class _InfoTile extends StatelessWidget {
     required this.title,
     required this.subtitle,
     this.trailing,
+    this.onTap,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
   final Widget? trailing;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
+      onTap: onTap,
       leading: Icon(icon),
       title: Text(
         title,

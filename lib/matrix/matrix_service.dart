@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vodozemac;
+import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -69,7 +70,17 @@ class MatrixService extends ChangeNotifier {
         sqfliteFactory: databaseFactory,
       );
 
-      final client = Client(clientName, database: matrixDatabase);
+      // Without declaring the methods this client supports, the SDK
+      // silently drops every incoming key-verification request — which is
+      // why "verify this device" prompts never appeared in the app.
+      final client = Client(
+        clientName,
+        database: matrixDatabase,
+        verificationMethods: const {
+          KeyVerificationMethod.emoji,
+          KeyVerificationMethod.numbers,
+        },
+      );
       _client = client;
 
       client.onLoginStateChanged.stream.listen((state) {

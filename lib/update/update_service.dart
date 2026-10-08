@@ -7,6 +7,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// A published GitHub release that is newer than the running build.
@@ -104,10 +105,12 @@ class UpdateService {
       throw StateError('Cette version ne contient pas de fichier APK.');
     }
 
-    final dir = await getApplicationDocumentsDirectory();
-    final target = Directory(p.join(dir.path, 'updates'));
-    await target.create(recursive: true);
-    final file = File(p.join(target.path, 'liber-${release.version}.apk'));
+    // Store under the shared external cache: a FileProvider can hand files
+    // from there to the system package installer even with scoped storage.
+    final base = await getExternalStorageDirectory();
+    final dir = Directory(p.join(base?.path ?? '.', 'updates'));
+    await dir.create(recursive: true);
+    final file = File(p.join(dir.path, 'liber-${release.version}.apk'));
 
     final client = http.Client();
     try {
@@ -148,13 +151,55 @@ class UpdateService {
 
   /// Asks Android to install the downloaded package. Returns false when the
   /// user backs out or no installer can handle the file.
+  ///
+  /// On Android 8+ installing an APK requires the "install unknown apps"
+  /// grant for this app. Without it, opening the APK silently fails — which
+  /// is what made the old updater appear to "do nothing" and leave the user
+  /// stuck on the previous version. We request the permission first (Android
+  /// shows its own settings panel) and surface failures via [installError].
+  static String? installError;
+
   static Future<bool> install(File file) async {
-    if (!await file.exists()) return false;
+    installError = null;
+    if (!await file.exists()) {
+      installError = 'Le fichier APK téléchargé est introuvable.';
+      return false;
+    }
+
+    final installPermission = await Permission.requestInstallPackages.status;
+    if (!installPermission.isGranted) {
+      final requested = await Permission.requestInstallPackages.request();
+      if (!requested.isGranted) {
+        installError =
+            "Pour installer la mise à jour, autorisez Liber à installer des "
+            'applications (Réglages → Applications → Liber → Installer des '
+            'apps inconnues), puis réessayez.';
+        return false;
+      }
+    }
+
     final result = await OpenFilex.open(
       file.path,
       type: 'application/vnd.android.package-archive',
     );
-    return result.type == ResultType.done;
+    switch (result.type) {
+      case ResultType.done:
+        return true;
+      case ResultType.noAppToOpen:
+        installError =
+            "Aucun installateur d'APK n'est disponible sur cet appareil.";
+      case ResultType.fileNotFound:
+        installError = "Le fichier APK n'est plus accessible.";
+      case ResultType.permissionDenied:
+        installError =
+            "Autorisation d'installation refusée. Accordez-la dans "
+            'Réglages → Applications → Liber → Installer des apps inconnues.';
+      default:
+        installError =
+            "L'installation n'a pas démarré (${result.message}). "
+            'Réessayez ou installez le fichier manuellement.';
+    }
+    return false;
   }
 
   static ReleaseInfo? _toRelease(Map<String, dynamic> json) {

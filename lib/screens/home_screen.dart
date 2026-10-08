@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 
 import '../matrix/matrix_service.dart';
@@ -8,6 +11,7 @@ import 'chat_screen.dart';
 import 'chats_tab.dart';
 import 'communities_tab.dart';
 import 'login_screen.dart';
+import 'verification_screen.dart';
 
 /// The main shell, laid out like WhatsApp's 2025 refresh: a light header with
 /// the title and camera-style actions, then a bottom navigation bar of icons
@@ -24,8 +28,58 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _tab = 0;
+  StreamSubscription<KeyVerification>? _verificationSub;
 
   MatrixService get _service => MatrixService.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    // Incoming cross-signing verification requests (e.g. "Verify this device"
+    // sent by Element Web or another session) previously went unnoticed —
+    // the app never showed any UI for them. Surface them now.
+    _verificationSub = _service.client?.onKeyVerificationRequest.stream
+        .listen(_onIncomingVerification);
+  }
+
+  void _onIncomingVerification(KeyVerification request) {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Vérification demandée'),
+        content: Text(
+          request.userId == request.client.userID
+              ? 'Une autre session de votre compte demande à vérifier ce '
+                  'portefeuille de clés.'
+              : '${request.userId} demande à vérifier la sécurité de la '
+                  'connexion.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              unawaited(request.cancel('m.user', true));
+              Navigator.of(dialogContext).pop();
+            },
+            child: const Text('Refuser'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              unawaited(VerificationScreen.open(context, request));
+            },
+            child: const Text('Vérifier'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    unawaited(_verificationSub?.cancel());
+    super.dispose();
+  }
 
   /// Unjoined rooms that belong to at least one space: they surface only in
   /// Communautés, like WhatsApp keeps community channels out of Chats.

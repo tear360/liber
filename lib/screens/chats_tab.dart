@@ -89,11 +89,12 @@ class _ChatsTabState extends State<ChatsTab>
         setState(() => _downloading = false);
         if (!installed) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
+            SnackBar(
               content: Text(
-                'Le téléchargement est terminé. Autorisez les installations '
-                "de sources inconnues pour terminer l'installation.",
+                UpdateService.installError ??
+                    "L'installation n'a pas pu démarrer. Réessayez.",
               ),
+              duration: const Duration(seconds: 6),
             ),
           );
         }
