@@ -76,6 +76,9 @@ class MatrixService extends ChangeNotifier {
     }
   }
 
+  static const String wrongRecoveryKey =
+      'Clé de récupération ou phrase secrète incorrecte.';
+
   /// Opens secure secret storage with [credential] (the recovery key or the
   /// passphrase chosen by the user) and downloads the room keys kept in the
   /// server-side backup.
@@ -110,10 +113,11 @@ class MatrixService extends ChangeNotifier {
 
     try {
       await open.unlock(keyOrPassphrase: value);
-    } catch (_) {
-      throw MatrixServiceException(
-        'Clé de récupération ou phrase secrète incorrecte.',
-      );
+    } on InvalidPassphraseException {
+      throw MatrixServiceException(wrongRecoveryKey);
+    } on FormatException {
+      // A mistyped recovery key does not decode at all.
+      throw MatrixServiceException(wrongRecoveryKey);
     }
 
     await downloadRoomKeys(encryption);
