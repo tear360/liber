@@ -37,8 +37,16 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     // Incoming cross-signing verification requests (e.g. "Verify this device"
     // sent by Element Web or another session) previously went unnoticed —
-    // the app never showed any UI for them. Surface them now.
-    _verificationSub = _service.client?.onKeyVerificationRequest.stream
+    // the app never showed any UI for them. Surface them now, and listen on
+    // the service so the hook is installed even if the client arrives late.
+    _service.addListener(_ensureVerificationListener);
+    _ensureVerificationListener();
+  }
+
+  void _ensureVerificationListener() {
+    final client = _service.client;
+    if (client == null || _verificationSub != null) return;
+    _verificationSub = client.onKeyVerificationRequest.stream
         .listen(_onIncomingVerification);
   }
 
@@ -50,8 +58,8 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Vérification demandée'),
         content: Text(
           request.userId == request.client.userID
-              ? 'Une autre session de votre compte demande à vérifier ce '
-                  'portefeuille de clés.'
+              ? 'Une autre session de votre compte demande à vérifier cet '
+                  'appareil.'
               : '${request.userId} demande à vérifier la sécurité de la '
                   'connexion.',
         ),
@@ -77,6 +85,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _service.removeListener(_ensureVerificationListener);
     unawaited(_verificationSub?.cancel());
     super.dispose();
   }

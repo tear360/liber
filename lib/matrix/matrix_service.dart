@@ -45,6 +45,104 @@ class MatrixService extends ChangeNotifier {
   String? get userId => _client?.userID;
   String? get homeserverUrl => _client?.homeserver?.toString();
 
+  Encryption? get encryption => _client?.encryption;
+
+  /// True when the account has signed this session with its cross-signing
+  /// key: peers then share their room keys with it and encrypted messages
+  /// become readable.
+  bool get sessionVerified {
+    final client = _client;
+    final userId = client?.userID;
+    final deviceId = client?.deviceID;
+    if (client == null || userId == null || deviceId == null) return false;
+    return client.userDeviceKeys[userId]?.deviceKeys[deviceId]?.verified ==
+        true;
+  }
+
+  /// True when the account keeps its keys in secure secret storage, so the
+  /// recovery key alone can unlock the messages on this device.
+  bool get recoveryKeyAvailable =>
+      _client?.encryption?.ssss.defaultKeyId != null;
+
+  /// True once the megolm backup key is cached, meaning the room keys stored
+  /// in the server-side backup can be downloaded without another device.
+  Future<bool> keysUnlocked() async {
+    final encryption = _client?.encryption;
+    if (encryption == null) return false;
+    try {
+      return await encryption.keyManager.isCached();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Opens secure secret storage with [credential] (the recovery key or the
+  /// passphrase chosen by the user) and downloads the room keys kept in the
+  /// server-side backup.
+  ///
+  /// This is what makes the history readable on a freshly logged-in device
+  /// without waiting for another session to come online: unlocking also
+  /// caches the cross-signing keys, and the SDK self-signs this device with
+  /// them, which is the same trusted state an interactive verification
+  /// reaches.
+  Future<void> restoreWithRecoveryKey(String credential) async {
+    final client = _client;
+    final encryption = client?.encryption;
+    if (client == null || encryption == null) {
+      throw MatrixServiceException(
+        "Le chiffrement n'est pas encore prêt sur cet appareil.",
+      );
+    }
+    final value = credential.trim();
+    if (value.isEmpty) {
+      throw MatrixServiceException('Saisissez votre clé de récupération.');
+    }
+
+    final OpenSSSS open;
+    try {
+      open = encryption.ssss.open();
+    } catch (_) {
+      throw MatrixServiceException(
+        "Ce compte n'a pas de clé de récupération enregistrée : utilisez "
+        'la vérification avec un autre appareil.',
+      );
+    }
+
+    try {
+      await open.unlock(keyOrPassphrase: value);
+    } catch (_) {
+      throw MatrixServiceException(
+        'Clé de récupération ou phrase secrète incorrecte.',
+      );
+    }
+
+    await downloadRoomKeys(encryption);
+  }
+
+  /// Pulls every room key out of the server-side backup.
+  Future<void> downloadRoomKeys([Encryption? encryption]) async {
+    final target = encryption ?? _client?.encryption;
+    final client = _client;
+    if (target == null || client == null) return;
+
+    try {
+      await target.keyManager.loadAllKeys();
+    } on MatrixException catch (e) {
+      if (e.errcode == 'M_NOT_FOUND') {
+        throw MatrixServiceException(
+          "Ce compte n'a pas de sauvegarde de clés : les messages déjà "
+          'reçus resteront illisibles sur cet appareil.',
+        );
+      }
+      rethrow;
+    }
+
+    // Rooms already on screen pick the new keys up through the SDK's session
+    // key stream; the others decrypt from the store when they are opened
+    // again. Nudging the client makes the chat list refresh its previews.
+    notifyListeners();
+  }
+
   /// Opens the local database and, when one exists, resumes the previous
   /// session. Safe to call more than once.
   Future<void> bootstrap() async {
@@ -230,4 +328,15 @@ class MatrixService extends ChangeNotifier {
     }
     return text;
   }
+}
+
+/// A failure that already carries a sentence meant for the user, so the UI
+/// can show it as-is instead of a stack trace.
+class MatrixServiceException implements Exception {
+  MatrixServiceException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }

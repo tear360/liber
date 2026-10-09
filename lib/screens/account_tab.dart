@@ -1,13 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 
 import '../matrix/matrix_service.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
-import 'verification_screen.dart';
+import 'security_screen.dart';
 
 /// The Compte tab: avatar, profile fields, device/session details and
 /// encryption status — everything identifying this account at a glance.
@@ -253,7 +252,7 @@ class _AccountTabState extends State<AccountTab> {
               ),
             ),
             const Divider(indent: 56),
-            _VerificationTile(),
+            const _SecurityTile(),
           ],
         ),
         const SizedBox(height: 12),
@@ -300,72 +299,38 @@ class _AccountTabState extends State<AccountTab> {
   }
 }
 
-class _VerificationTile extends StatefulWidget {
+/// The way into the security screen: it shows at a glance whether the
+/// encrypted history is readable here, which is the question users actually
+/// have when the locks show up.
+class _SecurityTile extends StatefulWidget {
+  const _SecurityTile();
+
   @override
-  State<_VerificationTile> createState() => _VerificationTileState();
+  State<_SecurityTile> createState() => _SecurityTileState();
 }
 
-class _VerificationTileState extends State<_VerificationTile> {
+class _SecurityTileState extends State<_SecurityTile> {
   bool _busy = false;
 
-  /// Cross-signing is usable only when both the crypto stack and the
-  /// account's cross-signing keys are in place; otherwise the tile hides.
-  bool _verificationAvailable(Client client) {
-    final encryption = client.encryption;
-    if (encryption == null || client.userID == null) return false;
-    final keyList = client.userDeviceKeys[client.userID!];
-    return keyList != null;
-  }
-
-  Future<void> _startSelfVerification() async {
-    final client = MatrixService.instance.client;
-    if (client == null || _busy) return;
-
+  Future<void> _open() async {
     setState(() => _busy = true);
-    KeyVerification? request;
-    try {
-      final keyList = client.userDeviceKeys[client.userID!];
-      if (keyList == null) throw Exception('Clés du compte indisponibles.');
-      request = await keyList.startVerification();
-      request.onUpdate = () {};
-      if (!mounted) return;
-      await VerificationScreen.open(context, request);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Vérification impossible : '
-              '${MatrixService.describeMatrixError(e)}',
-            ),
-          ),
-        );
-      }
-      try {
-        await request?.cancel('m.user', true);
-      } catch (_) {}
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+    await SecurityScreen.open(context);
+    if (mounted) setState(() => _busy = false);
   }
 
   @override
   Widget build(BuildContext context) {
-    final client = MatrixService.instance.client;
-    if (client == null || !_verificationAvailable(client)) {
-      return const SizedBox.shrink();
-    }
-    final verified =
-        client.userDeviceKeys[client.userID!]?.verified ==
-        UserVerifiedStatus.verified;
+    final service = MatrixService.instance;
+    if (service.client == null) return const SizedBox.shrink();
+    final verified = service.sessionVerified;
 
     return _InfoTile(
       icon: verified ? Icons.verified : Icons.gpp_maybe_outlined,
-      title: 'Vérifier cet appareil',
+      title: 'Sécurité des messages',
       subtitle: verified
-          ? 'Cet appareil est vérifié. Vous pouvez revérifier à tout moment.'
-          : 'Confirmez que cet appareil est bien le vôtre pour débloquer les '
-              'messages chiffrés.',
+          ? 'Cet appareil est vérifié : les messages chiffrés sont lisibles.'
+          : 'Messages chiffrés masqués : vérifiez cet appareil ou saisissez '
+              'votre clé de récupération.',
       trailing: _busy
           ? const SizedBox(
               width: 20,
@@ -376,7 +341,7 @@ class _VerificationTileState extends State<_VerificationTile> {
               Icons.chevron_right,
               color: verified ? WaPalette.accent : const Color(0xFFE0902B),
             ),
-      onTap: _busy ? null : _startSelfVerification,
+      onTap: _busy ? null : _open,
     );
   }
 }

@@ -8,6 +8,7 @@ import '../theme.dart';
 import '../update/update_service.dart';
 import '../widgets/chat_tile.dart';
 import 'chat_screen.dart';
+import 'security_screen.dart';
 
 /// The WhatsApp conversation list, driven straight off [Client.onSync] so a
 /// new message reorders the rows without a manual refresh.
@@ -38,6 +39,10 @@ class _ChatsTabState extends State<ChatsTab>
   bool _checkingUpdate = false;
   double _downloadProgress = 0;
   bool _downloading = false;
+
+  /// The encryption notice is dismissible: it must inform a new device, not
+  /// follow the user around once they have seen it.
+  bool _securityNoticeHidden = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -146,6 +151,13 @@ class _ChatsTabState extends State<ChatsTab>
           onInstall: _downloadUpdate,
           onDismiss: () => setState(() => _pendingUpdate = null),
         ),
+        // A session that has never been verified shows every encrypted room
+        // as unreadable; say why and where to fix it.
+        if (!_securityNoticeHidden && _needsSessionVerification(client))
+          _SecurityBanner(
+            onOpen: _openSecurity,
+            onDismiss: () => setState(() => _securityNoticeHidden = true),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
           child: TextField(
@@ -227,6 +239,16 @@ class _ChatsTabState extends State<ChatsTab>
     if (mounted) setState(() {});
   }
 
+  bool _needsSessionVerification(Client? client) =>
+      client != null &&
+      client.encryptionEnabled &&
+      !MatrixService.instance.sessionVerified;
+
+  Future<void> _openSecurity() async {
+    await SecurityScreen.open(context);
+    if (mounted) setState(() {});
+  }
+
   /// True when the newest message in the room was sent by this account, so
   /// the row can show WhatsApp's tick.
   bool _sentByMe(Room room) {
@@ -278,6 +300,58 @@ class _ChatsTabState extends State<ChatsTab>
       default:
         return body.replaceAll('\n', ' ');
     }
+  }
+}
+
+/// Sits under the update banner when this session is not verified, which is
+/// what hides the encrypted history behind locks.
+class _SecurityBanner extends StatelessWidget {
+  const _SecurityBanner({required this.onOpen, required this.onDismiss});
+
+  final VoidCallback onOpen;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFFFF4E5),
+      child: InkWell(
+        onTap: onOpen,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.lock_outline,
+                size: 20,
+                color: Color(0xFFE0902B),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Messages chiffrés masqués : vérifiez cet appareil pour les '
+                  'lire.',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    height: 1.35,
+                    color: WaPalette.textPrimary,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: onOpen,
+                child: const Text('Sécuriser'),
+              ),
+              IconButton(
+                tooltip: 'Masquer',
+                icon: const Icon(Icons.close, size: 18),
+                onPressed: onDismiss,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

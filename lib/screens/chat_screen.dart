@@ -8,6 +8,7 @@ import 'package:matrix/matrix.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
 import '../widgets/message_bubble.dart';
+import 'security_screen.dart';
 
 /// The conversation screen: green header, WhatsApp's beige wallpaper, message
 /// run grouping, day separators and the composer with its send button.
@@ -336,30 +337,62 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     final children = _renderMessages(timeline.events);
+    final locked = _hasUndecryptableEvents(timeline.events);
 
-    return NotificationListener<ScrollNotification>(
-      onNotification: (notification) {
-        if (notification.metrics.pixels <= 40 && !_loadingMore) {
-          unawaited(_loadOlder());
-        }
-        return false;
-      },
-      child: ListView(
-        controller: _scrollController,
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        children: children.isEmpty
-            ? [
-                const SizedBox(height: 160),
-                const Center(
-                  child: Text(
-                    'Aucun message pour le moment.',
-                    style: TextStyle(color: WaPalette.textSecondary),
-                  ),
-                ),
-              ]
-            : children,
-      ),
+    return Column(
+      children: [
+        // A new session gets no room keys until it is trusted: say so instead
+        // of letting the locks look like a broken app.
+        if (locked)
+          _LockedBanner(onUnlock: _unlockMessages, onRetry: _retryKeys),
+        Expanded(
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification.metrics.pixels <= 40 && !_loadingMore) {
+                unawaited(_loadOlder());
+              }
+              return false;
+            },
+            child: ListView(
+              controller: _scrollController,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              children: children.isEmpty
+                  ? [
+                      const SizedBox(height: 160),
+                      const Center(
+                        child: Text(
+                          'Aucun message pour le moment.',
+                          style: TextStyle(color: WaPalette.textSecondary),
+                        ),
+                      ),
+                    ]
+                  : children,
+            ),
+          ),
+        ),
+      ],
     );
+  }
+
+  static bool _hasUndecryptableEvents(List<Event> events) => events.any(
+        (event) =>
+            event.type == EventTypes.Encrypted &&
+            event.messageType == MessageTypes.BadEncrypted,
+      );
+
+  /// Sends the user to the security screen, then rebuilds the timeline so the
+  /// messages the new keys unlock appear in place.
+  Future<void> _unlockMessages() async {
+    await SecurityScreen.open(context);
+    if (!mounted) return;
+    await _openTimeline();
+  }
+
+  /// Asks for the missing room keys again — enough once the recovery key has
+  /// been entered, or when the other device came back online.
+  void _retryKeys() {
+    _timeline?.requestKeys();
+    unawaited(_openTimeline());
   }
 
   /// Renders events defensively: one malformed event (missing sender,
@@ -459,7 +492,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String _bubbleBody(Event event) {
     if (event.type == EventTypes.Encrypted) {
-      return event.body.isEmpty ? 'Message chiffré illisible' : event.body;
+      if (event.messageType == MessageTypes.BadEncrypted || event.body.isEmpty) {
+        return '🔒 Message chiffré illisible';
+      }
+      return event.body;
     }
     if (event.type == EventTypes.Sticker) return 'Sticker';
     switch (event.messageType) {
@@ -618,6 +654,63 @@ class _ChatScreenState extends State<ChatScreen> {
                           ),
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Tells the user that the locks in this conversation are a missing-key
+/// problem — not a broken message — and offers the two ways out.
+class _LockedBanner extends StatelessWidget {
+  const _LockedBanner({required this.onUnlock, required this.onRetry});
+
+  final VoidCallback onUnlock;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFFFF4E5),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.lock_outline, size: 20, color: Color(0xFFE0902B)),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Des messages chiffrés ne peuvent pas être lus sur cet '
+                    'appareil.',
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      height: 1.35,
+                      color: WaPalette.textPrimary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: onRetry,
+                  child: const Text('Réessayer'),
+                ),
+                const SizedBox(width: 4),
+                FilledButton(
+                  onPressed: onUnlock,
+                  child: const Text('Déverrouiller'),
+                ),
+                const SizedBox(width: 4),
+              ],
             ),
           ],
         ),
