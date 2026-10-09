@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:matrix/encryption.dart';
 
+import '../matrix/matrix_service.dart';
 import '../theme.dart';
 
 /// Interactive account verification (cross-signing).
@@ -51,7 +52,15 @@ class _VerificationScreenState extends State<VerificationScreen> {
 
   void _onUpdate() {
     if (mounted) setState(() {});
+    // The account now trusts this device: nobody pushes the old room keys on
+    // their own, so ask for them (backup first, then the other devices).
+    if (_request.state == KeyVerificationState.done && !_keysRequested) {
+      _keysRequested = true;
+      unawaited(MatrixService.instance.requestMissingKeys());
+    }
   }
+
+  bool _keysRequested = false;
 
   Future<void> _accept() async {
     setState(() {
@@ -110,7 +119,7 @@ class _VerificationScreenState extends State<VerificationScreen> {
   Widget build(BuildContext context) {
     return Theme(
       data: Theme.of(context).copyWith(
-        appBarTheme: const AppBarTheme(
+        appBarTheme: AppBarTheme(
           backgroundColor: WaPalette.primary,
           foregroundColor: Colors.white,
           elevation: 0,
@@ -121,7 +130,7 @@ class _VerificationScreenState extends State<VerificationScreen> {
         ),
       ),
       child: Scaffold(
-        backgroundColor: Colors.white,
+        backgroundColor: WaPalette.surface,
         appBar: AppBar(
           title: const Text('Vérification'),
           actions: [
@@ -298,7 +307,7 @@ class _VerificationScreenState extends State<VerificationScreen> {
                 Text(
                   emojis[index].name,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
                     color: WaPalette.textSecondary,
                   ),
@@ -334,7 +343,7 @@ class _VerificationScreenState extends State<VerificationScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _Header(
+        _Header(
           icon: Icons.verified,
           title: 'Appareil vérifié',
           text: 'Cet appareil est désormais marqué comme fiable sur votre '
@@ -374,24 +383,24 @@ class _Header extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.text,
-    this.iconColor = WaPalette.primary,
+    this.iconColor,
   });
 
   final IconData icon;
   final String title;
   final String text;
-  final Color iconColor;
+  final Color? iconColor;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Icon(icon, size: 56, color: iconColor),
+        Icon(icon, size: 56, color: iconColor ?? WaPalette.primary),
         const SizedBox(height: 16),
         Text(
           title,
           textAlign: TextAlign.center,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 19,
             fontWeight: FontWeight.w600,
             color: WaPalette.textPrimary,
@@ -401,7 +410,7 @@ class _Header extends StatelessWidget {
         Text(
           text,
           textAlign: TextAlign.center,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 14,
             height: 1.4,
             color: WaPalette.textSecondary,

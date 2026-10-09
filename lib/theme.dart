@@ -1,45 +1,63 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-/// The light palette used by WhatsApp today. Every value here is transcribed
-/// from the shipping app so Liber reads as the same product at a glance.
+/// WhatsApp's palette, resolved for the brightness currently in use.
+///
+/// Every screen reads these getters instead of `const` colours, so switching
+/// to dark mode repaints the whole app without touching call sites. The
+/// brightness is set by [AppThemeController] just before the tree rebuilds.
 abstract final class WaPalette {
+  /// Brightness the getters below resolve against. Always set together with
+  /// the effective `ThemeMode`, before children build.
+  static Brightness brightness = Brightness.light;
+
+  static bool get isDark => brightness == Brightness.dark;
+
+  static Color _v(Color light, Color dark) => isDark ? dark : light;
+
   /// Top bar, selected tab label and icons on light surfaces.
-  static const Color primary = Color(0xFF008069);
+  static Color get primary => _v(const Color(0xFF008069), const Color(0xFF005C4B));
 
   /// Slightly deeper green for pressed states and the splash.
-  static const Color primaryDark = Color(0xFF005C4B);
+  static Color get primaryDark => _v(const Color(0xFF005C4B), const Color(0xFF004034));
 
   /// FAB and "archived"/secondary green accents.
-  static const Color accent = Color(0xFF00A884);
+  static Color get accent => _v(const Color(0xFF00A884), const Color(0xFF00A884));
 
   /// Unread counter pill.
-  static const Color unreadBadge = Color(0xFF25D366);
+  static Color get unreadBadge => _v(const Color(0xFF25D366), const Color(0xFF25D366));
 
   /// The compose FAB sits on this green.
-  static const Color fab = Color(0xFF21C063);
+  static Color get fab => _v(const Color(0xFF21C063), const Color(0xFF21C063));
 
   /// Chat screen wallpaper, the beige behind bubbles.
-  static const Color wallpaper = Color(0xFFEFE7DE);
+  static Color get wallpaper => _v(const Color(0xFFEFE7DE), const Color(0xFF0B141A));
 
   /// Outgoing (own) message bubble.
-  static const Color outgoingBubble = Color(0xFFD9FDD3);
+  static Color get outgoingBubble => _v(const Color(0xFFD9FDD3), const Color(0xFF005C4B));
 
   /// Incoming message bubble.
-  static const Color incomingBubble = Color(0xFFFFFFFF);
+  static Color get incomingBubble => _v(const Color(0xFFFFFFFF), const Color(0xFF1B262C));
 
-  static const Color textPrimary = Color(0xFF111B21);
-  static const Color textSecondary = Color(0xFF667781);
-  static const Color iconMuted = Color(0xFF54656F);
-  static const Color divider = Color(0xFFE9EDEF);
-  static const Color surface = Color(0xFFFFFFFF);
-  static const Color composerField = Color(0xFFF0F2F5);
-  static const Color incomingTimestamp = Color(0xFF667781);
+  static Color get textPrimary => _v(const Color(0xFF111B21), const Color(0xFFE9EDEF));
+  static Color get textSecondary => _v(const Color(0xFF667781), const Color(0xFF8696A0));
+  static Color get iconMuted => _v(const Color(0xFF54656F), const Color(0xFF8696A0));
+  static Color get divider => _v(const Color(0xFFE9EDEF), const Color(0xFF222E35));
+  static Color get surface => _v(const Color(0xFFFFFFFF), const Color(0xFF111B21));
+  static Color get composerField => _v(const Color(0xFFF0F2F5), const Color(0xFF2A3942));
+  static Color get incomingTimestamp => _v(const Color(0xFF667781), const Color(0xFF8696A0));
+
+  /// Cards and banners sitting on top of [surface].
+  static Color get raised => _v(const Color(0xFFFFFFFF), const Color(0xFF1B262C));
+
+  /// Amber notice banners (unlock prompts, warnings).
+  static Color get notice => _v(const Color(0xFFFFF4E5), const Color(0xFF2B2416));
 
   /// Bottom navigation: selected icon/label, unselected icon/label.
-  static const Color navSelected = Color(0xFF103529);
-  static const Color navUnselected = Color(0xFF54656F);
+  static Color get navSelected => _v(const Color(0xFF103529), const Color(0xFF00A884));
+  static Color get navUnselected => _v(const Color(0xFF54656F), const Color(0xFF8696A0));
 
   /// Colours a call can take to stand in for a missing avatar.
   static const List<Color> avatarPalette = <Color>[
@@ -54,23 +72,76 @@ abstract final class WaPalette {
   ];
 }
 
+/// Holds the user's theme choice (`clair` / `sombre` / `système`), persisted
+/// in shared preferences, and repaints the app when it changes.
+abstract final class AppThemeController {
+  static const String _key = 'theme_mode';
+
+  static final ValueNotifier<ThemeMode> mode = ValueNotifier(ThemeMode.system);
+
+  /// Loads the stored choice. Safe to call more than once.
+  static Future<void> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    mode.value = switch (prefs.getString(_key)) {
+      'light' => ThemeMode.light,
+      'dark' => ThemeMode.dark,
+      _ => ThemeMode.system,
+    };
+  }
+
+  /// Applies and stores a new choice.
+  static Future<void> set(ThemeMode value) async {
+    mode.value = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _key,
+      switch (value) {
+        ThemeMode.light => 'light',
+        ThemeMode.dark => 'dark',
+        ThemeMode.system => 'system',
+      },
+    );
+  }
+
+  /// The brightness the app actually renders with right now: system theme
+  /// follows the device setting, the two others are explicit.
+  static Brightness effectiveBrightness() {
+    switch (mode.value) {
+      case ThemeMode.light:
+        return Brightness.light;
+      case ThemeMode.dark:
+        return Brightness.dark;
+      case ThemeMode.system:
+        return WidgetsBinding.instance.platformDispatcher.platformBrightness;
+    }
+  }
+}
+
 /// Builds the Material theme that makes the app look like WhatsApp.
-ThemeData buildLiberTheme() {
+///
+/// Call [preparePalette] first (or build both themes through
+/// [buildLiberTheme] for the brightness you intend to show) so that
+/// [WaPalette] resolves to the matching colours.
+ThemeData buildLiberTheme({Brightness brightness = Brightness.light}) {
+  WaPalette.brightness = brightness;
+  final isDark = brightness == Brightness.dark;
+
   final base = ThemeData(
     useMaterial3: true,
+    brightness: brightness,
     colorScheme: ColorScheme.fromSeed(
       seedColor: WaPalette.primary,
       primary: WaPalette.primary,
       secondary: WaPalette.accent,
       surface: WaPalette.surface,
-      brightness: Brightness.light,
+      brightness: brightness,
     ),
     scaffoldBackgroundColor: WaPalette.surface,
   );
 
   return base.copyWith(
     // WhatsApp's 2025 layout: light header, dark text, green accents.
-    appBarTheme: const AppBarTheme(
+    appBarTheme: AppBarTheme(
       backgroundColor: WaPalette.surface,
       foregroundColor: WaPalette.textPrimary,
       elevation: 0,
@@ -84,37 +155,39 @@ ThemeData buildLiberTheme() {
       ),
       systemOverlayStyle: SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.dark,
-        statusBarBrightness: Brightness.light,
+        statusBarIconBrightness:
+            isDark ? Brightness.light : Brightness.dark,
+        statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
       ),
     ),
-    tabBarTheme: const TabBarThemeData(
-      labelColor: WaPalette.primary,
+    tabBarTheme: TabBarThemeData(
+      labelColor: WaPalette.accent,
       unselectedLabelColor: WaPalette.textSecondary,
-      labelStyle: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-      unselectedLabelStyle: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
-      indicatorColor: WaPalette.primary,
+      labelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+      unselectedLabelStyle:
+          const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+      indicatorColor: WaPalette.accent,
       indicatorSize: TabBarIndicatorSize.label,
       dividerColor: Colors.transparent,
     ),
-    floatingActionButtonTheme: const FloatingActionButtonThemeData(
+    floatingActionButtonTheme: FloatingActionButtonThemeData(
       backgroundColor: WaPalette.fab,
       foregroundColor: Colors.white,
       elevation: 3,
     ),
-    dividerTheme: const DividerThemeData(
+    dividerTheme: DividerThemeData(
       color: WaPalette.divider,
       thickness: 1,
       space: 1,
     ),
-    listTileTheme: const ListTileThemeData(
-      contentPadding: EdgeInsets.symmetric(horizontal: 16),
+    listTileTheme: ListTileThemeData(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
       iconColor: WaPalette.iconMuted,
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: WaPalette.composerField,
-      hintStyle: const TextStyle(color: WaPalette.textSecondary, fontSize: 16),
+      hintStyle: TextStyle(color: WaPalette.textSecondary, fontSize: 16),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(24),
@@ -139,7 +212,8 @@ ThemeData buildLiberTheme() {
       ),
     ),
     snackBarTheme: SnackBarThemeData(
-      backgroundColor: const Color(0xFF111B21),
+      backgroundColor:
+          isDark ? const Color(0xFF2A3942) : const Color(0xFF111B21),
       contentTextStyle: const TextStyle(color: Colors.white, fontSize: 14),
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -153,18 +227,22 @@ ThemeData buildLiberTheme() {
       trackColor: WidgetStateProperty.resolveWith(
         (states) => states.contains(WidgetState.selected)
             ? WaPalette.accent
-            : const Color(0xFFD9DBDD),
+            : (isDark
+                ? const Color(0xFF3B4A54)
+                : const Color(0xFFD9DBDD)),
       ),
     ),
     chipTheme: ChipThemeData(
       backgroundColor: WaPalette.composerField,
-      selectedColor: const Color(0xFFD3F4E5),
+      selectedColor: isDark
+          ? const Color(0xFF005C4B)
+          : const Color(0xFFD3F4E5),
       showCheckmark: false,
       labelStyle: const TextStyle(fontSize: 13.5),
       side: BorderSide.none,
       padding: const EdgeInsets.symmetric(horizontal: 8),
     ),
-    bottomNavigationBarTheme: const BottomNavigationBarThemeData(
+    bottomNavigationBarTheme: BottomNavigationBarThemeData(
       backgroundColor: WaPalette.surface,
       selectedItemColor: WaPalette.navSelected,
       unselectedItemColor: WaPalette.navUnselected,

@@ -50,7 +50,7 @@ class ChatTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final unread = unreadCount > 0;
-    const titleColor = WaPalette.textPrimary;
+    final titleColor = WaPalette.textPrimary;
 
     return Column(
       children: [
@@ -91,7 +91,7 @@ class ChatTile extends StatelessWidget {
                     subtitleOverride!,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14.5,
                       color: WaPalette.textSecondary,
                       fontStyle: FontStyle.italic,
@@ -115,7 +115,7 @@ class ChatTile extends StatelessWidget {
                 ),
               if (isEncrypted) ...[
                 const SizedBox(width: 4),
-                const Icon(
+                Icon(
                   Icons.lock,
                   size: 13,
                   color: WaPalette.textSecondary,

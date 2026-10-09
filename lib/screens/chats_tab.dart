@@ -183,7 +183,7 @@ class _ChatsTabState extends State<ChatsTab>
 
                     if (rooms.isEmpty) {
                       return waitingForFirstSync
-                          ? const Center(
+                          ? Center(
                               child: CircularProgressIndicator(
                                 color: WaPalette.primary,
                               ),
@@ -314,7 +314,7 @@ class _SecurityBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: const Color(0xFFFFF4E5),
+      color: WaPalette.notice,
       child: InkWell(
         onTap: onOpen,
         child: Padding(
@@ -327,7 +327,7 @@ class _SecurityBanner extends StatelessWidget {
                 color: Color(0xFFE0902B),
               ),
               const SizedBox(width: 10),
-              const Expanded(
+              Expanded(
                 child: Text(
                   'Messages chiffrés masqués : vérifiez cet appareil pour les '
                   'lire.',
@@ -378,7 +378,7 @@ class _UpdateBanner extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
         child: Row(
           children: [
-            const Icon(Icons.system_update, color: WaPalette.primary, size: 22),
+            Icon(Icons.system_update, color: WaPalette.primary, size: 22),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -386,7 +386,7 @@ class _UpdateBanner extends StatelessWidget {
                 children: [
                   Text(
                     'Liber ${release.version} est disponible',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w600,
                       fontSize: 14,
                       color: WaPalette.textPrimary,
@@ -399,7 +399,7 @@ class _UpdateBanner extends StatelessWidget {
                           color: WaPalette.primary,
                           backgroundColor: const Color(0xFFCDEDE6),
                         )
-                      : const Text(
+                      : Text(
                           'Touchez pour télécharger et installer.',
                           style: TextStyle(
                             fontSize: 12.5,
@@ -448,7 +448,7 @@ class _EmptyChats extends StatelessWidget {
             const SizedBox(height: 18),
             Text(
               searching ? 'Aucun résultat' : 'Aucune discussion',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.w600,
                 color: WaPalette.textPrimary,
@@ -461,7 +461,7 @@ class _EmptyChats extends StatelessWidget {
                   : "Appuyez sur le bouton vert pour écrire à quelqu'un par "
                       'son identifiant Matrix.',
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 color: WaPalette.textSecondary,
                 fontSize: 14,
                 height: 1.4,

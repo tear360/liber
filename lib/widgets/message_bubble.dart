@@ -117,7 +117,7 @@ class MessageBubble extends StatelessWidget {
               Flexible(
                 child: SelectableText(
                   body,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: WaPalette.textPrimary,
                     fontSize: 15.4,
                     height: 1.25,
@@ -212,7 +212,7 @@ class MessageBubble extends StatelessWidget {
         child: Text(
           body,
           textAlign: TextAlign.center,
-          style: const TextStyle(
+          style: TextStyle(
             color: WaPalette.textSecondary,
             fontSize: 12.8,
             height: 1.3,
@@ -241,7 +241,7 @@ class _StatusIcon extends StatelessWidget {
         );
       case EventStatus.sent:
         // One tick: left the device, not yet confirmed by the server.
-        return const Icon(Icons.check, size: 14, color: WaPalette.textSecondary);
+        return Icon(Icons.check, size: 14, color: WaPalette.textSecondary);
       case EventStatus.synced:
         // Double tick: everybody in the room received it.
         return const Icon(Icons.done_all, size: 14, color: Color(0xFF53BDEB));
@@ -267,7 +267,7 @@ class DaySeparator extends StatelessWidget {
         ),
         child: Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             color: WaPalette.textSecondary,
             fontSize: 12.5,
             fontWeight: FontWeight.w500,

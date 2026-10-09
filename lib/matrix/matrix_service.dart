@@ -123,6 +123,67 @@ class MatrixService extends ChangeNotifier {
     await downloadRoomKeys(encryption);
   }
 
+  /// Session ids already asked for, so repeated retries do not spam the
+  /// other devices of the account with to-device requests.
+  final Set<String> _requestedSessions = <String>{};
+
+  /// Asks for the room keys this device is still missing.
+  ///
+  /// Verifying a device only proves it to the account — nobody sends the
+  /// old megolm keys on their own, they have to be requested. The online
+  /// backup is tried first and, when it does not exist (the common case on
+  /// matrix.org), the request falls through to the account's other devices.
+  /// That second path is what makes the history readable after a
+  /// verification.
+  Future<void> requestMissingKeys() async {
+    final client = _client;
+    final encryption = client?.encryption;
+    if (client == null || encryption == null) return;
+
+    for (final room in client.rooms) {
+      if (room.isSpace || room.membership == Membership.leave) continue;
+      if (!room.encrypted) continue;
+
+      final lastEvent = room.lastEvent;
+      if (lastEvent == null ||
+          lastEvent.type != EventTypes.Encrypted ||
+          lastEvent.messageType != MessageTypes.BadEncrypted ||
+          lastEvent.content['can_request_session'] != true) {
+        continue;
+      }
+
+      final sessionId = lastEvent.content.tryGet<String>('session_id');
+      final senderKey = lastEvent.content.tryGet<String>('sender_key');
+      if (sessionId == null || senderKey == null) continue;
+
+      final key = '${room.id}|$sessionId';
+      if (!_requestedSessions.add(key)) continue;
+
+      unawaited(_requestSessionKey(room, sessionId, senderKey, encryption));
+    }
+    notifyListeners();
+  }
+
+  /// Never lets a single unreachable peer break a key request.
+  static Future<void> _requestSessionKey(
+    Room room,
+    String sessionId,
+    String? senderKey,
+    Encryption encryption,
+  ) async {
+    try {
+      await encryption.keyManager.request(
+        room,
+        sessionId,
+        senderKey,
+        tryOnlineBackup: true,
+        onlineKeyBackupOnly: false,
+      );
+    } catch (_) {
+      // Best effort: the retry stays available in the conversation.
+    }
+  }
+
   /// Pulls every room key out of the server-side backup.
   Future<void> downloadRoomKeys([Encryption? encryption]) async {
     final target = encryption ?? _client?.encryption;

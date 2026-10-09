@@ -89,6 +89,9 @@ class _SecurityScreenState extends State<SecurityScreen> {
       request = await keyList.startVerification();
       if (!mounted) return;
       await VerificationScreen.open(context, request);
+      // Verification alone never copies the old room keys: ask for them now
+      // that the account trusts this device.
+      await _service.requestMissingKeys();
       await _refreshKeyState();
     } catch (e) {
       if (mounted) {
@@ -148,13 +151,13 @@ class _SecurityScreenState extends State<SecurityScreen> {
     final canRestore = !_restoring && _recoveryController.text.trim().isNotEmpty;
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: WaPalette.surface,
       appBar: AppBar(
         title: const Text('Sécurité des messages'),
         backgroundColor: WaPalette.primary,
         foregroundColor: Colors.white,
         elevation: 0,
-        systemOverlayStyle: const SystemUiOverlayStyle(
+        systemOverlayStyle: SystemUiOverlayStyle(
           statusBarColor: WaPalette.primary,
           statusBarIconBrightness: Brightness.light,
         ),
@@ -167,7 +170,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: verified ? WaPalette.accent.withValues(alpha: 0.12)
-                    : const Color(0xFFFFF4E5),
+                    : WaPalette.notice,
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Row(
@@ -188,7 +191,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                           : 'Cet appareil n’est pas encore vérifié. Les '
                               'messages chiffrés reçus avant son ajout sont '
                               'illisibles : déverrouillez-les ci-dessous.',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
                         height: 1.4,
                         color: WaPalette.textPrimary,
@@ -280,7 +283,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                 ),
               ),
               if (_restoring)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.only(top: 8),
                   child: Text(
                     'Le téléchargement des clés peut prendre une minute sur '
@@ -330,7 +333,7 @@ class _SectionTitle extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 6),
       child: Text(
         text.toUpperCase(),
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 12.5,
           fontWeight: FontWeight.w600,
           color: WaPalette.accent,
@@ -350,7 +353,7 @@ class _Explanation extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text,
-      style: const TextStyle(
+      style: TextStyle(
         fontSize: 13.5,
         height: 1.45,
         color: WaPalette.textSecondary,
@@ -417,7 +420,7 @@ class _StatusRow extends StatelessWidget {
           Expanded(
             child: Text(
               label,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14.5,
                 color: WaPalette.textPrimary,
               ),
@@ -425,7 +428,7 @@ class _StatusRow extends StatelessWidget {
           ),
           Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
               color: WaPalette.textSecondary,
             ),

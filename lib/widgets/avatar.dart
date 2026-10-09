@@ -30,7 +30,9 @@ class MatrixAvatar extends StatefulWidget {
 }
 
 class _MatrixAvatarState extends State<MatrixAvatar> {
-  late final Future<Uint8List?> _image;
+  // Not `final`: [didUpdateWidget] reassigns it when the avatar or the
+  // homeserver changes, which throws LateInitializationError otherwise.
+  late Future<Uint8List?> _image;
 
   @override
   void initState() {

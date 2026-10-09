@@ -65,7 +65,7 @@ class _SplashScreenState extends State<SplashScreen> {
                 shape: BoxShape.circle,
               ),
               alignment: Alignment.center,
-              child: const Text(
+              child: Text(
                 'L',
                 style: TextStyle(
                   fontSize: 52,

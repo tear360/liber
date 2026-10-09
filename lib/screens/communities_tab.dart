@@ -31,7 +31,7 @@ class CommunitiesTab extends StatelessWidget {
       builder: (context, snapshot) {
         final spaces = _spaces(client);
         if (spaces.isEmpty) {
-          return const Center(
+          return Center(
             child: Padding(
               padding: EdgeInsets.symmetric(horizontal: 48),
               child: Column(
@@ -91,7 +91,7 @@ class CommunitiesTab extends StatelessWidget {
                 space.topic.isEmpty ? 'Espace Matrix' : space.topic,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13.5,
                   color: WaPalette.textSecondary,
                 ),
@@ -158,7 +158,7 @@ class _SpaceRoomsScreen extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.meeting_room_outlined,
                       size: 48,
                       color: WaPalette.accent,
@@ -167,14 +167,14 @@ class _SpaceRoomsScreen extends StatelessWidget {
                     Text(
                       'Aucun salon visible dans « $name ».',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: WaPalette.textSecondary,
                         fontSize: 15,
                         height: 1.4,
                       ),
                     ),
                     const SizedBox(height: 8),
-                    const Text(
+                    Text(
                       'Les salons apparaissent ici dès que le serveur a envoyé '
                       'leur liste. Tirez pour rafraîchir après un instant.',
                       textAlign: TextAlign.center,
@@ -221,7 +221,7 @@ class _SpaceRoomsScreen extends StatelessWidget {
                       ),
                     ),
                     subtitle: invited
-                        ? const Text(
+                        ? Text(
                             'Invitation reçue — touchez pour rejoindre',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,

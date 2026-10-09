@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:matrix/matrix.dart';
 
+import '../matrix/matrix_service.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
 import '../widgets/message_bubble.dart';
@@ -199,7 +200,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // tabs moved to the light 2025 header.
     return Theme(
       data: Theme.of(context).copyWith(
-        appBarTheme: const AppBarTheme(
+        appBarTheme: AppBarTheme(
           backgroundColor: WaPalette.primary,
           foregroundColor: Colors.white,
           elevation: 0,
@@ -316,7 +317,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     }
     if (_joining) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -359,7 +360,7 @@ class _ChatScreenState extends State<ChatScreen> {
               children: children.isEmpty
                   ? [
                       const SizedBox(height: 160),
-                      const Center(
+                      Center(
                         child: Text(
                           'Aucun message pour le moment.',
                           style: TextStyle(color: WaPalette.textSecondary),
@@ -388,11 +389,13 @@ class _ChatScreenState extends State<ChatScreen> {
     await _openTimeline();
   }
 
-  /// Asks for the missing room keys again — enough once the recovery key has
-  /// been entered, or when the other device came back online.
-  void _retryKeys() {
-    _timeline?.requestKeys();
-    unawaited(_openTimeline());
+  /// Asks for the missing room keys again — from the online backup, from the
+  /// account's other devices, then rebuilds the timeline from the store so
+  /// whatever arrived shows up immediately.
+  Future<void> _retryKeys() async {
+    _timeline?.requestKeys(tryOnlineBackup: true, onlineKeyBackupOnly: false);
+    await MatrixService.instance.requestMissingKeys();
+    await _openTimeline();
   }
 
   /// Renders events defensively: one malformed event (missing sender,
@@ -588,7 +591,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     IconButton(
-                      icon: const Icon(
+                      icon: Icon(
                         Icons.emoji_emotions_outlined,
                         color: WaPalette.textSecondary,
                       ),
@@ -613,7 +616,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(
+                      icon: Icon(
                         Icons.attach_file,
                         color: WaPalette.textSecondary,
                       ),
@@ -673,13 +676,13 @@ class _LockedBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: const Color(0xFFFFF4E5),
+      color: WaPalette.notice,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(Icons.lock_outline, size: 20, color: Color(0xFFE0902B)),
@@ -740,13 +743,13 @@ class _ChatIssue extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
+            Icon(
               Icons.chat_bubble_outline,
               size: 48,
               color: WaPalette.textSecondary,
             ),
             const SizedBox(height: 16),
-            const Text(
+            Text(
               'Salon indisponible',
               style: TextStyle(
                 fontSize: 17,
@@ -760,7 +763,7 @@ class _ChatIssue extends StatelessWidget {
               textAlign: TextAlign.center,
               maxLines: 6,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13.5,
                 color: WaPalette.textSecondary,
                 height: 1.4,

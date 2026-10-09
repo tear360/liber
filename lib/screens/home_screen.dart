@@ -330,14 +330,14 @@ class _CallsTab extends StatelessWidget {
               shape: BoxShape.circle,
             ),
             alignment: Alignment.center,
-            child: const Icon(
+            child: Icon(
               Icons.call_outlined,
               size: 44,
               color: WaPalette.accent,
             ),
           ),
           const SizedBox(height: 20),
-          const Text(
+          Text(
             'Aucun appel',
             style: TextStyle(
               fontSize: 18,
@@ -346,7 +346,7 @@ class _CallsTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(horizontal: 40),
             child: Text(
               "Les appels Matrix apparaîtront ici. Liber couvre pour l'instant "

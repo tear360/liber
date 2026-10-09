@@ -91,7 +91,7 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Center(
+                Center(
                   child: CircleAvatar(
                     radius: 44,
                     backgroundColor: WaPalette.primary,
@@ -208,7 +208,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       : const Text('Se connecter'),
                 ),
                 const SizedBox(height: 24),
-                const Text(
+                Text(
                   "Liber ne crée pas de comptes : inscrivez-vous d'abord sur "
                   "votre serveur (par exemple element.io), puis connectez-vous "
                   'ici.',

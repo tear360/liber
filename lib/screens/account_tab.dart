@@ -102,7 +102,7 @@ class _AccountTabState extends State<AccountTab> {
     final avatarUri = _profile?.avatarUrl;
 
     if (!service.isLoggedIn) {
-      return const Center(
+      return Center(
         child: Text(
           'Non connecté',
           style: TextStyle(color: WaPalette.textSecondary, fontSize: 15),
@@ -172,7 +172,7 @@ class _AccountTabState extends State<AccountTab> {
                                     : 'Aucun nom défini',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 19,
                                   fontWeight: FontWeight.w600,
                                   color: WaPalette.textPrimary,
@@ -189,7 +189,7 @@ class _AccountTabState extends State<AccountTab> {
                       const SizedBox(height: 2),
                       Text(
                         userId,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 13.5,
                           color: WaPalette.textSecondary,
                         ),
@@ -253,6 +253,47 @@ class _AccountTabState extends State<AccountTab> {
             ),
             const Divider(indent: 56),
             const _SecurityTile(),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        _Section(
+          title: 'Apparence',
+          children: [
+            ListenableBuilder(
+              listenable: AppThemeController.mode,
+              builder: (context, _) {
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+                  child: SegmentedButton<ThemeMode>(
+                    segments: const [
+                      ButtonSegment(
+                        value: ThemeMode.light,
+                        label: Text('Clair'),
+                        icon: Icon(Icons.light_mode_outlined, size: 18),
+                      ),
+                      ButtonSegment(
+                        value: ThemeMode.dark,
+                        label: Text('Sombre'),
+                        icon: Icon(Icons.dark_mode_outlined, size: 18),
+                      ),
+                      ButtonSegment(
+                        value: ThemeMode.system,
+                        label: Text('Système'),
+                        icon: Icon(Icons.brightness_auto_outlined, size: 18),
+                      ),
+                    ],
+                    selected: {AppThemeController.mode.value},
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    onSelectionChanged: (selection) =>
+                        unawaited(AppThemeController.set(selection.first)),
+                  ),
+                );
+              },
+            ),
           ],
         ),
         const SizedBox(height: 12),
@@ -362,7 +403,7 @@ class _Section extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Text(
               title!.toUpperCase(),
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12.5,
                 fontWeight: FontWeight.w600,
                 color: WaPalette.accent,
@@ -401,7 +442,7 @@ class _InfoTile extends StatelessWidget {
       leading: Icon(icon),
       title: Text(
         title,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 16,
           color: WaPalette.textPrimary,
           fontWeight: FontWeight.w500,
@@ -409,7 +450,7 @@ class _InfoTile extends StatelessWidget {
       ),
       subtitle: Text(
         subtitle,
-        style: const TextStyle(fontSize: 13.5, color: WaPalette.textSecondary),
+        style: TextStyle(fontSize: 13.5, color: WaPalette.textSecondary),
       ),
       trailing: trailing,
     );

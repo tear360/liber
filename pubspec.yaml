@@ -4,7 +4,7 @@ publish_to: 'none'
 
 # versionName = 1.0.0, versionCode = 1.
 # The auto-updater compares the Git tag (v1.0.1) against `version` below.
-version: 1.0.4+5
+version: 1.0.6+6
 
 environment:
   sdk: ^3.13.5
