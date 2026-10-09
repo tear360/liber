@@ -5,6 +5,7 @@ import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 
 import '../matrix/matrix_service.dart';
+import '../notifications/notification_service.dart';
 import '../theme.dart';
 import 'account_tab.dart';
 import 'chat_screen.dart';
@@ -42,6 +43,22 @@ class _HomeScreenState extends State<HomeScreen> {
     // the service so the hook is installed even if the client arrives late.
     _service.addListener(_ensureVerificationListener);
     _ensureVerificationListener();
+    // A notification tapped while the app was in the background opens the
+    // conversation it belongs to.
+    NotificationService.pendingRoomId.addListener(_openPendingRoom);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openPendingRoom());
+  }
+
+  void _openPendingRoom() {
+    final roomId = NotificationService.pendingRoomId.value;
+    if (roomId == null || !mounted) return;
+    NotificationService.pendingRoomId.value = null;
+
+    final room = _service.client?.getRoomById(roomId);
+    if (room == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => ChatScreen(room: room)),
+    );
   }
 
   void _ensureVerificationListener() {
@@ -86,6 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    NotificationService.pendingRoomId.removeListener(_openPendingRoom);
     _service.removeListener(_ensureVerificationListener);
     unawaited(_verificationSub?.cancel());
     super.dispose();

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
 
+import 'notifications/notification_service.dart';
 import 'screens/splash_screen.dart';
 import 'theme.dart';
 
@@ -19,6 +20,10 @@ Future<void> main() async {
   // The stored theme choice has to be known before the first frame: it picks
   // the palette and the status bar icon colour.
   await AppThemeController.load();
+  // Notification channel and tap handler must exist before the first sync
+  // delivers a message.
+  await NotificationService.init();
+
   final brightness = AppThemeController.effectiveBrightness();
   WaPalette.brightness = brightness;
   SystemChrome.setSystemUIOverlayStyle(

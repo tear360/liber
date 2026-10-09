@@ -141,11 +141,18 @@ mis à jour dans le SDK. Testée en build, **non testée en conditions réelles*
 
 ## 12. Notifications — 🟡 partielle
 
-- ✅ Compteurs et badge de navigation, état non-lu, notifications par pièce de code.
-- 🚫 Push réseau : nécessite une passerelle Matrix (sygnal/ntfy) → service externe.
-- ⬜ Notifications locales (nouveaux messages/mentions), permission Android 13+,
-  réglages par compte/salon (SDK : `room.setPushRuleState` déjà disponible),
-  anti-doublon à la reconnexion.
+- ✅ Compteurs et badge de navigation, état non-lu.
+- ✅ **Notifications locales** : messages et invitations reçus en arrière-plan
+  (`lib/notifications/notification_service.dart`), canal Android, permission
+  Android 13+ demandée à la connexion, ouverture de la conversation au tap,
+  identifiant stable par salon (pas d'empilement), contenu jamais inventé pour
+  un message chiffré illisible.
+- ✅ **Mute par salon** via les push rules serveur (menu ⋮ du salon :
+  « Couper / Activer les notifications ») — la règle vaut pour tous les
+  appareils du compte et l'évaluation des règles bloque aussi les notifs locales.
+- 🚫 Push réseau (notification reçue hors-ligne, sans le processus en vie) :
+  nécessite une passerelle Matrix (sygnal/ntfy) → service externe.
+- ⬜ Réglages par compte, notifications de réponses aux threads.
 
 ## 13. Presence et indicateurs de lecture — 🟡 partielle
 
@@ -303,7 +310,8 @@ Chaque phase est un ensemble de modules cohérents, livrés par une release.
 ## P3 — Médias, notifications, contacts
 
 - Envoi/réception de médias (upload chiffré géré par le SDK), progression, réessai.
-- Notifications locales + permission Android 13+, réglage par salon (push rules).
+- ✅ Notifications locales + permission Android 13+, réglage par salon
+  (push rules serveur).
 - Indicateurs de frappe et de lecture, fiche de profil tiers, blocage.
 
 ## P4 — Fonctionnalités Matrix avancées
@@ -326,7 +334,7 @@ Chaque phase est un ensemble de modules cohérents, livrés par une release.
 | --- | --- | --- |
 | `flutter_webrtc` | appels audio/vidéo réels | §14 |
 | `image_picker` + `file_picker` | envoi de médias | §9 |
-| `flutter_local_notifications` | notifications locales | §12 |
+| ~~`flutter_local_notifications`~~ | ✅ ajouté : notifications locales — licence **BSD-3-Clause** (vérifiée dans le `LICENSE` du paquet) | §12 |
 | `geolocator` (ou équivalent) | partage de position | §16 |
 | `emoji_picker_flutter` (ou équivalent) | sélecteur d'émojis/réactions | §17 |
 | `url_launcher` | ouverture de liens/positions | §3, §16 |

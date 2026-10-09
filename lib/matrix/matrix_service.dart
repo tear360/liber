@@ -9,6 +9,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../notifications/notification_service.dart';
+
 /// Owns the single [Client] for the process: opening the local store,
 /// restoring a session left by a previous run, and performing password login.
 ///
@@ -255,6 +257,10 @@ class MatrixService extends ChangeNotifier {
       );
       _client = client;
 
+      // Every event the account's push rules want to announce becomes a
+      // system notification while the app is in the background.
+      NotificationService.bind(client);
+
       client.onLoginStateChanged.stream.listen((state) {
         if (state == LoginState.loggedIn) _error = null;
         notifyListeners();
@@ -266,6 +272,9 @@ class MatrixService extends ChangeNotifier {
       if (stored != null) {
         try {
           await client.init();
+          if (client.isLogged()) {
+            unawaited(NotificationService.requestPermission());
+          }
         } catch (e) {
           _error = describeMatrixError(e);
         }
@@ -311,6 +320,7 @@ class MatrixService extends ChangeNotifier {
         initialDeviceDisplayName: 'Liber (Android)',
       );
       await _rememberHomeserver(client.homeserver?.toString());
+      unawaited(NotificationService.requestPermission());
       return true;
     } catch (e) {
       _error = describeMatrixError(e);

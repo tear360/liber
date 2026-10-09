@@ -187,6 +187,85 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Silences (or re-enables) this conversation. The rule lives on the
+  /// homeserver, so it applies to every client of the account and to the
+  /// local notifications through the same push-rule evaluation.
+  Future<void> _toggleNotifications() async {
+    final muted = room.pushRuleState == PushRuleState.dontNotify;
+    try {
+      await room.setPushRuleState(
+        muted ? PushRuleState.notify : PushRuleState.dontNotify,
+      );
+      if (mounted) {
+        setState(() {});
+        _snack(
+          muted
+              ? 'Notifications activées pour cette conversation.'
+              : 'Notifications coupées pour cette conversation.',
+        );
+      }
+    } catch (e) {
+      if (mounted) _snack('Modification impossible : $e');
+    }
+  }
+
+  /// What the "Informations" entry promises: identity, size and encryption
+  /// state of this conversation, plus its identifier for support requests.
+  Future<void> _showRoomInfo() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(
+          room.isDirectChat ? 'Informations du contact' : 'Informations du salon',
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              room.getLocalizedDisplayname(),
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              room.id,
+              style: TextStyle(
+                fontSize: 12.5,
+                color: WaPalette.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '${room.getParticipants().length} participants',
+              style: const TextStyle(fontSize: 13.5),
+            ),
+            Text(
+              room.encrypted
+                  ? 'Chiffrement de bout en bout : actif'
+                  : 'Conversation non chiffrée',
+              style: const TextStyle(fontSize: 13.5),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Fermer'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: room.id));
+              if (dialogContext.mounted) {
+                Navigator.of(dialogContext).pop();
+              }
+            },
+            child: const Text("Copier l'identifiant"),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _leave() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -319,13 +398,28 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             PopupMenuButton<String>(
               onSelected: (value) {
-                if (value == 'leave') _leave();
+                switch (value) {
+                  case 'info':
+                    _showRoomInfo();
+                  case 'notifications':
+                    _toggleNotifications();
+                  case 'leave':
+                    _leave();
+                }
               },
               itemBuilder: (context) => [
                 PopupMenuItem(
                   value: 'info',
                   child: Text(
                     isGroup ? 'Informations du salon' : 'Informations de contact',
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'notifications',
+                  child: Text(
+                    room.pushRuleState == PushRuleState.dontNotify
+                        ? 'Activer les notifications'
+                        : 'Couper les notifications',
                   ),
                 ),
                 const PopupMenuItem(value: 'leave', child: Text('Quitter')),
