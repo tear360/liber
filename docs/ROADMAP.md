@@ -77,8 +77,10 @@ CI : `flutter analyze` (0 issue) + `flutter test` (6 tests) obligatoires.
   dans le champ multiligne** (pas de Shift+Entrée configurable).
 - 🟡 Événements modifiés/supprimés : le SDK agrège les remplacements, l'app n'affiche
   pas encore l'indicateur « modifié » ni l'effacement des messages retirés.
-- ⬜ Édition de ses messages, suppression, réponses (aperçu), réactions, copie,
-  partage, mentions, aperçus d'URL, aperçus de médias reçus.
+- ✅ Appui long sur une bulle : **répondre** (citation + `m.in_reply_to`),
+  **copier** le texte ou l'identifiant de l'événement, **modifier** ses messages
+  (`m.replace`, libellé « modifié »), **supprimer** (redaction, avec confirmation).
+- ⬜ Réactions, partage, mentions, aperçus d'URL, aperçus de médias reçus.
 
 ## 4. Threads — ⬜ à faire
 
@@ -199,9 +201,9 @@ synchronisation entre appareils n'existe pas tant que rien n'est partagé.
 
 ## 21. Paramètres et synchronisation — 🟡 partielle
 
-- ✅ Écran de paramètres **existe** (`settings_screen.dart`) : sécurité, mises à
-  jour, à propos — mais **il n'est accessible depuis aucun écran** (branchement manquant).
-- ⬜ Raccourci d'accès, sections messagerie/notifications/audio-vidéo/accessibilité,
+- ✅ Écran de paramètres (`settings_screen.dart`) : sécurité, mises à jour,
+  à propos — **accessible depuis le menu ⋮ des Discussions et des onglets**.
+- ⬜ Sections messagerie/notifications/audio-vidéo/accessibilité,
   réinitialisation, export/import, préférences de compte via `account_data`.
 
 ## 22. Comptes multiples — ⬜ à faire (gros chantier)
@@ -279,15 +281,17 @@ Chaque phase est un ensemble de modules cohérents, livrés par une release.
 - ✅ Message « réessayer les clés » après vérification.
 - ✅ Correctif écran noir, correctif erreur de profil, thème sombre.
 
-## P1 — Messagerie complète (prochaine phase)
+## P1 — Messagerie complète (en cours)
 
-1. **Actions sur les messages** : répondre (aperçu), copier, éditer, supprimer
+1. ✅ **Actions sur les messages** : répondre (aperçu), copier, éditer, supprimer
    (redaction), menu long-appui — `chat_screen.dart`, `message_bubble.dart`.
-2. **Réactions** : barre de réactions rapides, affichage agrégé, ajout/retrait
+2. ⬜ **Réactions** : barre de réactions rapides, affichage agrégé, ajout/retrait
    (`room.sendReaction`) — nouveau `reaction_bar.dart`.
-3. **Affichage des édits et suppressions** (« modifié », message retiré).
-4. **Touche Entrée configurable** (envoyer vs retour à la ligne).
-5. Tests : agrégation de réactions, rendu d'un message édité, rendu d'un message retiré.
+3. ✅ **Affichage des édits et suppressions** (libellé « modifié », message
+   retiré retiré du fil).
+4. ⬜ **Touche Entrée configurable** (envoyer vs retour à la ligne).
+5. ⬜ Tests : agrégation de réactions, édition/suppression côté serveur ;
+   ✅ tests de rendu de la citation et du libellé « modifié » ajoutés.
 
 ## P2 — Salons, espaces et recherche
 

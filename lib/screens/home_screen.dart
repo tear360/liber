@@ -11,6 +11,7 @@ import 'chat_screen.dart';
 import 'chats_tab.dart';
 import 'communities_tab.dart';
 import 'login_screen.dart';
+import 'settings_screen.dart';
 import 'verification_screen.dart';
 
 /// The main shell, laid out like WhatsApp's 2025 refresh: a light header with
@@ -164,6 +165,12 @@ class _HomeScreenState extends State<HomeScreen> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _openSettings() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
+    );
+  }
+
   Future<void> _confirmLogout() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -219,21 +226,30 @@ class _HomeScreenState extends State<HomeScreen> {
                 switch (value) {
                   case 'new':
                     _newDiscussion();
+                  case 'settings':
+                    _openSettings();
                   case 'logout':
                     _confirmLogout();
                 }
               },
               itemBuilder: (context) => const [
                 PopupMenuItem(value: 'new', child: Text('Nouvelle discussion')),
+                PopupMenuItem(value: 'settings', child: Text('Paramètres')),
                 PopupMenuItem(value: 'logout', child: Text('Se déconnecter')),
               ],
             ),
           ] else
             PopupMenuButton<String>(
               onSelected: (value) {
-                if (value == 'logout') _confirmLogout();
+                switch (value) {
+                  case 'settings':
+                    _openSettings();
+                  case 'logout':
+                    _confirmLogout();
+                }
               },
               itemBuilder: (context) => const [
+                PopupMenuItem(value: 'settings', child: Text('Paramètres')),
                 PopupMenuItem(value: 'logout', child: Text('Se déconnecter')),
               ],
             ),

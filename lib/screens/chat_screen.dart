@@ -33,6 +33,12 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _joining = false;
   bool _loadingMore = false;
 
+  /// Set while the composer is answering a message, and while it is
+  /// rewriting one — the SDK then tags the outgoing event with the right
+  /// relation (`m.in_reply_to` / `m.replace`).
+  Event? _replyTo;
+  Event? _editing;
+
   Room get room => widget.room;
 
   @override
@@ -128,18 +134,47 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _composerController.text.trim();
     if (text.isEmpty || _sending) return;
 
+    final editing = _editing;
+    final replyTo = _replyTo;
+
     _composerController.clear();
     FocusScope.of(context).unfocus();
-    setState(() => _sending = true);
+    setState(() {
+      _sending = true;
+      _editing = null;
+      _replyTo = null;
+    });
 
     try {
-      await room.sendTextEvent(
-        text,
-        parseMarkdown: false,
-        parseCommands: false,
-      );
+      if (editing != null) {
+        await room.sendEvent(
+          {'msgtype': MessageTypes.Text, 'body': text},
+          type: EventTypes.Message,
+          editEventId: editing.eventId,
+        );
+      } else if (replyTo != null) {
+        await room.sendEvent(
+          {'msgtype': MessageTypes.Text, 'body': text},
+          type: EventTypes.Message,
+          inReplyTo: replyTo,
+        );
+      } else {
+        await room.sendTextEvent(
+          text,
+          parseMarkdown: false,
+          parseCommands: false,
+        );
+      }
     } catch (e) {
       if (mounted) {
+        // Put the text back where the user left it, so nothing is lost.
+        if (editing != null || replyTo != null) {
+          _composerController.text = text;
+        }
+        setState(() {
+          if (editing != null) _editing = editing;
+          if (replyTo != null) _replyTo = replyTo;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Message non envoyé : $e')),
         );
@@ -301,6 +336,7 @@ class _ChatScreenState extends State<ChatScreen> {
         body: Column(
           children: [
             Expanded(child: _buildBody()),
+            if (_editing != null || _replyTo != null) _contextBanner(),
             _buildComposer(),
           ],
         ),
@@ -337,7 +373,7 @@ class _ChatScreenState extends State<ChatScreen> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final children = _renderMessages(timeline.events);
+    final children = _renderMessages(timeline);
     final locked = _hasUndecryptableEvents(timeline.events);
 
     return Column(
@@ -402,17 +438,22 @@ class _ChatScreenState extends State<ChatScreen> {
   /// redaction race…) must never blank the whole screen — that was the
   /// "black screen after 2 s" bug. A bad event is skipped and logged instead
   /// of throwing through the build method.
-  List<Widget> _renderMessages(List<Event> events) {
+  List<Widget> _renderMessages(Timeline timeline) {
+    final events = timeline.events;
     final widgets = <Widget>[];
     final ownId = room.client.userID ?? '';
     DateTime? lastDay;
     Event? previous;
 
-    for (final event in events) {
-      final kind = _classify(event);
+    for (final raw in events) {
+      final kind = _classify(raw);
       if (kind == _EventKind.hidden) continue;
+      // A withdrawn message keeps its place in the timeline but no content.
+      if (kind == _EventKind.message && raw.redacted) continue;
 
       try {
+        // Applies the latest edit made by the original author, if any.
+        final event = raw.getDisplayEvent(timeline);
         final ts = event.originServerTs;
         final day = DateTime(ts.year, ts.month, ts.day);
         final isNewDay = lastDay == null || day != lastDay;
@@ -452,23 +493,37 @@ class _ChatScreenState extends State<ChatScreen> {
         final group =
             !room.isDirectChat && startsRun && !isMine && events.length > 1;
 
+        final quoted = kind == _EventKind.message
+            ? _quotedEvent(events, event)
+            : null;
+
         widgets.add(
-          MessageBubble(
-            body: _bubbleBody(event),
-            isMine: isMine,
-            timestamp: ts,
-            showTail: startsRun,
-            senderName: group
-                ? (event.senderFromMemoryOrFallback.displayName ?? senderId)
-                : null,
-            senderColor: _senderColor(senderId),
-            status: event.status,
-            failed: event.status == EventStatus.error,
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onLongPress: () => unawaited(_showMessageActions(raw, event)),
+            child: MessageBubble(
+              body: _bubbleBody(event),
+              isMine: isMine,
+              timestamp: ts,
+              showTail: startsRun,
+              senderName: group
+                  ? (event.senderFromMemoryOrFallback.displayName ?? senderId)
+                  : null,
+              senderColor: _senderColor(senderId),
+              status: event.status,
+              failed: event.status == EventStatus.error,
+              replySender: quoted == null
+                  ? null
+                  : (quoted.senderFromMemoryOrFallback.displayName ??
+                      quoted.senderId),
+              replyText: quoted == null ? null : _bubbleBody(quoted),
+              edited: event.eventId != raw.eventId,
+            ),
           ),
         );
         previous = event;
       } catch (e, s) {
-        Logs().w('[Liber] Skipping unrenderable event ${event.eventId}', e, s);
+        Logs().w('[Liber] Skipping unrenderable event ${raw.eventId}', e, s);
       }
     }
 
@@ -480,6 +535,8 @@ class _ChatScreenState extends State<ChatScreen> {
       case EventTypes.Message:
       case EventTypes.Sticker:
       case EventTypes.Encrypted:
+        // Withdrawn messages are gone: showing "Redacted" would be a lie.
+        if (event.redacted) return _EventKind.hidden;
         return _EventKind.message;
       case EventTypes.RoomMember:
       case EventTypes.RoomName:
@@ -515,6 +572,199 @@ class _ChatScreenState extends State<ChatScreen> {
       default:
         return event.body;
     }
+  }
+
+  /// Finds the event this one replies to, when it is already part of the
+  /// loaded chunk. Otherwise the quote falls back to a bare attribution.
+  static Event? _quotedEvent(List<Event> events, Event event) {
+    final relates = event.content['m.relates_to'];
+    if (relates is! Map) return null;
+    final inReply = relates['m.in_reply_to'];
+    if (inReply is! Map) return null;
+    final eventId = inReply['event_id'];
+    if (eventId is! String) return null;
+    for (final candidate in events) {
+      if (candidate.eventId == eventId && !candidate.redacted) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  /// Long-press menu: the actions Matrix exposes for a message, with no
+  /// dead entries — edition and deletion only appear when the server lets
+  /// this account perform them (the SDK surfaces a real error otherwise).
+  Future<void> _showMessageActions(Event raw, Event display) async {
+    if (_sending) return;
+    final own = raw.senderId == room.client.userID;
+    final editable =
+        own && !raw.redacted && display.messageType == MessageTypes.Text;
+
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: WaPalette.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.reply),
+              title: const Text('Répondre'),
+              onTap: () => Navigator.of(sheetContext).pop('reply'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.copy),
+              title: const Text('Copier'),
+              onTap: () => Navigator.of(sheetContext).pop('copy'),
+            ),
+            if (editable)
+              ListTile(
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Modifier'),
+                onTap: () => Navigator.of(sheetContext).pop('edit'),
+              ),
+            if (editable)
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Supprimer'),
+                onTap: () => Navigator.of(sheetContext).pop('delete'),
+              ),
+            ListTile(
+              leading: const Icon(Icons.tag),
+              title: const Text("Copier l'identifiant de l'événement"),
+              onTap: () => Navigator.of(sheetContext).pop('copyid'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == null || !mounted) return;
+
+    switch (action) {
+      case 'reply':
+        setState(() {
+          _editing = null;
+          _replyTo = raw;
+        });
+        FocusScope.of(context).requestFocus(_focusNode);
+      case 'edit':
+        setState(() {
+          _replyTo = null;
+          _editing = raw;
+          _composerController.text = display.body;
+        });
+        FocusScope.of(context).requestFocus(_focusNode);
+      case 'copy':
+        await Clipboard.setData(ClipboardData(text: display.body));
+        if (mounted) _snack('Message copié.');
+      case 'copyid':
+        await Clipboard.setData(ClipboardData(text: raw.eventId));
+        if (mounted) _snack("Identifiant de l'événement copié.");
+      case 'delete':
+        await _confirmDelete(raw);
+    }
+  }
+
+  Future<void> _confirmDelete(Event event) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Supprimer ce message ?'),
+        content: const Text(
+          'Le message sera retiré du serveur pour tout le monde, si votre '
+          'niveau de permission le permet.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await event.redactEvent();
+    } catch (e) {
+      if (mounted) _snack('Suppression impossible : $e');
+    }
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// Banner between the timeline and the composer showing what the next
+  /// send will do: answer, or rewrite an existing message.
+  Widget _contextBanner() {
+    final editing = _editing;
+    final replyTo = _replyTo;
+    final target = editing ?? replyTo!;
+    final title = editing != null
+        ? 'Modifier le message'
+        : 'Répondre à ${target.senderFromMemoryOrFallback.displayName ?? target.senderId}';
+
+    return Material(
+      color: WaPalette.surface,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 4, 4),
+        child: Row(
+          children: [
+            Icon(
+              editing != null ? Icons.edit_outlined : Icons.reply,
+              size: 18,
+              color: WaPalette.accent,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: WaPalette.textPrimary,
+                    ),
+                  ),
+                  Text(
+                    _bubbleBody(target),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: WaPalette.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Annuler',
+              icon: const Icon(Icons.close, size: 18),
+              onPressed: () => setState(() {
+                _editing = null;
+                _replyTo = null;
+                if (editing != null) _composerController.clear();
+              }),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   static String _systemText(Event event) {

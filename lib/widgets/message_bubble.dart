@@ -51,6 +51,9 @@ class MessageBubble extends StatelessWidget {
     this.status,
     this.isSystem = false,
     this.failed = false,
+    this.replySender,
+    this.replyText,
+    this.edited = false,
   });
 
   final String body;
@@ -68,6 +71,13 @@ class MessageBubble extends StatelessWidget {
   /// System notices (joins, name changes) render as a centred pill.
   final bool isSystem;
   final bool failed;
+
+  /// Quoted message shown above the body when this one is a reply.
+  final String? replySender;
+  final String? replyText;
+
+  /// True when a later edit by the same author replaced the original text.
+  final bool edited;
 
   @override
   Widget build(BuildContext context) {
@@ -110,12 +120,55 @@ class MessageBubble extends StatelessWidget {
             ),
             const SizedBox(height: 2),
           ],
+          if (replySender != null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.fromLTRB(7, 4, 9, 5),
+                decoration: BoxDecoration(
+                  color: WaPalette.isDark
+                      ? Colors.black.withValues(alpha: 0.28)
+                      : Colors.black.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border(
+                    left: BorderSide(color: WaPalette.accent, width: 3),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      replySender!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: WaPalette.accent,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (replyText != null && replyText!.isNotEmpty)
+                      Text(
+                        replyText!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: WaPalette.textSecondary,
+                          fontSize: 12.5,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
           Row(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Flexible(
-                child: SelectableText(
+                child: Text(
                   body,
                   style: TextStyle(
                     color: WaPalette.textPrimary,
@@ -134,6 +187,18 @@ class MessageBubble extends StatelessWidget {
                         size: 14, color: Color(0xFFD33B3B))
                   else if (isMine && status != null)
                     _StatusIcon(status: status!),
+                  if (edited)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 3),
+                      child: Text(
+                        'modifié',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontStyle: FontStyle.italic,
+                          color: WaPalette.incomingTimestamp,
+                        ),
+                      ),
+                    ),
                   const SizedBox(width: 3),
                   Text(
                     DateFormat.Hm().format(timestamp),
