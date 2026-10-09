@@ -26,11 +26,15 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // flutter_local_notifications needs core library desugaring;
+        // without it :app:checkReleaseAarMetadata fails.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 
     defaultConfig {
+        multiDexEnabled = true
         applicationId = "org.liber"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
@@ -70,4 +74,8 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
