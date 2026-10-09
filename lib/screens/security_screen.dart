@@ -124,8 +124,9 @@ class _SecurityScreenState extends State<SecurityScreen> {
       if (!mounted) return;
       setState(() {
         _keysUnlocked = true;
-        _status = 'Vos messages chiffrés sont maintenant lisibles sur cet '
-            'appareil. Ouvrez une discussion pour les voir.';
+        _status = 'Les clés de votre compte ont été restaurées : les messages '
+            'chiffrés disponibles s’affichent en clair. Ouvrez une discussion '
+            'pour les voir.';
       });
     } catch (e) {
       if (mounted) {

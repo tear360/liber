@@ -129,6 +129,15 @@ class MatrixService extends ChangeNotifier {
     final client = _client;
     if (target == null || client == null) return;
 
+    // Without that secret in secure storage the SDK would return quietly and
+    // the user would believe the history had been restored.
+    if (!await target.keyManager.isCached()) {
+      throw MatrixServiceException(
+        "Ce compte ne sauvegarde pas ses clés : seule la vérification avec "
+        'un autre appareil peut débloquer les messages.',
+      );
+    }
+
     try {
       await target.keyManager.loadAllKeys();
     } on MatrixException catch (e) {
