@@ -30,8 +30,14 @@ class _SplashScreenState extends State<SplashScreen> {
     super.dispose();
   }
 
+  /// Guards against the double call that used to queue two page routes on
+  /// top of each other: `bootstrap()` both notifies its listeners and
+  /// completes, and each path reached `_route`.
+  bool _routing = false;
+
   void _route() {
-    if (!mounted || !_service.bootstrapped) return;
+    if (_routing || !mounted || !_service.bootstrapped) return;
+    _routing = true;
     _service.removeListener(_route);
 
     final next = _service.isLoggedIn

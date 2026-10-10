@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:matrix/matrix.dart';
 
+import '../diagnostics.dart';
 import '../matrix/matrix_service.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
@@ -21,6 +22,26 @@ class ChatScreen extends StatefulWidget {
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
+
+/// The SDK stores its events newest first; the conversation is read the
+/// other way round, so the newest message renders last, next to the composer.
+List<Event> timelineEventsOldestFirst(List<Event> events) =>
+    events.reversed.toList();
+
+/// The event that follows [event] in the SDK's list — i.e. the newer one.
+Event? newerEventOf(List<Event> events, Event event) {
+  final i = events.indexWhere((e) => e.eventId == event.eventId);
+  return i > 0 ? events[i - 1] : null;
+}
+
+/// WhatsApp paints the tail on the last bubble of a consecutive run: the
+/// message whose successor is from someone else, or more than five minutes
+/// later, ends its run.
+bool endsMessageRun(Event event, Event? newer) =>
+    newer == null ||
+    newer.senderId != event.senderId ||
+    newer.originServerTs.difference(event.originServerTs) >
+        const Duration(minutes: 5);
 
 class _ChatScreenState extends State<ChatScreen> {
   final _composerController = TextEditingController();
@@ -50,6 +71,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _composerController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
@@ -84,6 +106,14 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       setState(() => _timeline = timeline);
       unawaited(_markRead());
+      // Opening a conversation is the natural moment to ask again for the
+      // room keys this device is missing (deduplicated in the service), both
+      // for the room's latest session and for every locked event on screen.
+      unawaited(MatrixService.instance.requestMissingKeys());
+      timeline.requestKeys(
+        tryOnlineBackup: true,
+        onlineKeyBackupOnly: false,
+      );
       WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
     } catch (e) {
       if (!mounted) return;
@@ -101,9 +131,19 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Coalesces the five timeline callbacks (which often arrive in the same
+  /// frame during a sync burst) into one rebuild and one read receipt —
+  /// without it the conversation stuttered while messages streamed in.
+  Timer? _refreshTimer;
+
   void _refresh() {
-    if (mounted) setState(() {});
-    unawaited(_markRead());
+    if (!mounted || _refreshTimer != null) return;
+    _refreshTimer = Timer(const Duration(milliseconds: 120), () {
+      _refreshTimer = null;
+      if (!mounted) return;
+      setState(() {});
+      unawaited(_markRead());
+    });
   }
 
   Future<void> _loadOlder() async {
@@ -134,6 +174,17 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _composerController.text.trim();
     if (text.isEmpty || _sending) return;
 
+    // A room with encryption switched on must never receive a plaintext
+    // event: without the crypto library the SDK would send it in the clear
+    // and every other client would refuse to display it.
+    if (room.encrypted && !MatrixService.instance.encryptionEnabled) {
+      _snack(
+        'Le chiffrement n’est pas actif sur cet appareil : message non '
+        'envoyé, il serait parti en clair. Ouvrez Sécurité pour le réactiver.',
+      );
+      return;
+    }
+
     final editing = _editing;
     final replyTo = _replyTo;
 
@@ -144,6 +195,8 @@ class _ChatScreenState extends State<ChatScreen> {
       _editing = null;
       _replyTo = null;
     });
+    Diagnostics.instance
+        .add('Envoi d’un message dans ${room.getLocalizedDisplayname()}');
 
     try {
       if (editing != null) {
@@ -166,6 +219,7 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
     } catch (e) {
+      Diagnostics.instance.add('Envoi impossible — $e');
       if (mounted) {
         // Put the text back where the user left it, so nothing is lost.
         if (editing != null || replyTo != null) {
@@ -469,9 +523,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final children = _renderMessages(timeline);
     final locked = _hasUndecryptableEvents(timeline.events);
+    final cryptoOff =
+        room.encrypted && !MatrixService.instance.encryptionEnabled;
 
     return Column(
       children: [
+        // Encryption never started on this device: nothing in this room can
+        // be read, and sending is blocked rather than leaking in the clear.
+        if (cryptoOff) _CryptoOffBanner(onRetry: _recoverCrypto),
         // A new session gets no room keys until it is trusted: say so instead
         // of letting the locks look like a broken app.
         if (locked)
@@ -532,6 +591,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// redaction race…) must never blank the whole screen — that was the
   /// "black screen after 2 s" bug. A bad event is skipped and logged instead
   /// of throwing through the build method.
+  ///
+  /// The SDK lists events newest-first; the list is rendered the other way
+  /// round so the conversation reads top → bottom like every messenger —
+  /// otherwise a message just sent lands at the top of the list, far above
+  /// where the user is looking, and looks lost.
   List<Widget> _renderMessages(Timeline timeline) {
     final events = timeline.events;
     final widgets = <Widget>[];
@@ -539,7 +603,7 @@ class _ChatScreenState extends State<ChatScreen> {
     DateTime? lastDay;
     Event? previous;
 
-    for (final raw in events) {
+    for (final raw in eventsOldestFirst(events)) {
       final kind = _classify(raw);
       if (kind == _EventKind.hidden) continue;
       // A withdrawn message keeps its place in the timeline but no content.
@@ -578,11 +642,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
         final senderId = event.senderId;
         final isMine = senderId == ownId;
+
+        // WhatsApp shows the sender's name on the first message of a run and
+        // paints the tail on its last one.
         final startsRun =
             previous == null ||
             previous.senderId != senderId ||
             ts.difference(previous.originServerTs) >
                 const Duration(minutes: 5);
+        final showTail = endsRun(event, newerEventOf(events, raw));
 
         final group =
             !room.isDirectChat && startsRun && !isMine && events.length > 1;
@@ -599,13 +667,16 @@ class _ChatScreenState extends State<ChatScreen> {
               body: _bubbleBody(event),
               isMine: isMine,
               timestamp: ts,
-              showTail: startsRun,
+              showTail: showTail,
               senderName: group
                   ? (event.senderFromMemoryOrFallback.displayName ?? senderId)
                   : null,
               senderColor: _senderColor(senderId),
               status: event.status,
               failed: event.status == EventStatus.error,
+              // A lock the SDK could not open is tappable: the dialog tells
+              // why this message is sealed and how to get the key.
+              onTapLock: _isLocked(event) ? () => _showLockInfo(event) : null,
               replySender: quoted == null
                   ? null
                   : (quoted.senderFromMemoryOrFallback.displayName ??
@@ -622,6 +693,126 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     return widgets;
+  }
+
+  /// The SDK stores newest events first; the UI reads them the other way.
+  @visibleForTesting
+  static List<Event> eventsOldestFirst(List<Event> events) =>
+      timelineEventsOldestFirst(events);
+
+  /// WhatsApp paints the tail on the last bubble of a consecutive run.
+  @visibleForTesting
+  static bool endsRun(Event event, Event? newer) =>
+      endsMessageRun(event, newer);
+
+  /// A message the SDK could not decrypt (missing room key, mostly).
+  static bool _isLocked(Event event) =>
+      event.type == EventTypes.Encrypted &&
+      event.messageType == MessageTypes.BadEncrypted;
+
+  /// Explains one locked bubble instead of leaving a bare padlock: shows the
+  /// exact error the SDK recorded, and the two ways to get the key.
+  Future<void> _showLockInfo(Event event) async {
+    final error = event.body.trim();
+    final sessionId = event.content.tryGet<String>('session_id');
+    Diagnostics.instance.add(
+      'Message verrouillé consulté : ${error.isEmpty ? 'aucune raison '
+          'enregistrée' : error}',
+    );
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Message chiffré illisible'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Ce message est protégé par une clé que cet appareil ne '
+                'possède pas encore. Raison enregistrée par le SDK :',
+                style: TextStyle(fontSize: 13.5, height: 1.4),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                width: double.maxFinite,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF2F2F2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: SelectableText(
+                  error.isEmpty ? 'Inconnue' : error,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+              if (sessionId != null && sessionId.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Identifiant de la session de clé : …'
+                  '${sessionId.length > 12 ? sessionId.substring(sessionId.length - 12) : sessionId}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: WaPalette.textSecondary,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 8),
+              const Text(
+                'La clé arrive par la vérification de votre appareil, par la '
+                'sauvegarde de clés du compte, ou sur demande auprès des '
+                'autres appareils déjà connectés.',
+                style: TextStyle(fontSize: 13, height: 1.4),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              unawaited(
+                Clipboard.setData(ClipboardData(text: error)),
+              );
+              Navigator.of(dialogContext).pop();
+            },
+            child: const Text('Copier la raison'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              unawaited(_retryKeys());
+            },
+            child: const Text('Redemander la clé'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              unawaited(SecurityScreen.open(context));
+            },
+            child: const Text('Sécurité'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Tries to start the crypto library again after a failed boot, then
+  /// leaves the conversation: rooms are rebuilt from the new client.
+  Future<void> _recoverCrypto() async {
+    final ok = await MatrixService.instance.recoverCrypto();
+    if (!mounted) return;
+    if (ok) {
+      _snack('Chiffrement réactivé : ouvrez à nouveau la conversation.');
+      Navigator.of(context).maybePop();
+    } else {
+      _snack(
+        'Le chiffrement n’a toujours pas pu démarrer : voir Sécurité → '
+        'Journal.',
+      );
+    }
   }
 
   static _EventKind _classify(Event event) {
@@ -1016,7 +1207,6 @@ class _LockedBanner extends StatelessWidget {
 
   final VoidCallback onUnlock;
   final VoidCallback onRetry;
-
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -1058,6 +1248,48 @@ class _LockedBanner extends StatelessWidget {
                 ),
                 const SizedBox(width: 4),
               ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Said out loud when the crypto library never started on this device:
+/// every encrypted message would stay locked and sending would be refused
+/// rather than leaking in the clear.
+class _CryptoOffBanner extends StatelessWidget {
+  const _CryptoOffBanner({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFF6DEDE),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.gpp_bad_outlined,
+                size: 20, color: Color(0xFFB3261E)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Le chiffrement n’a pas pu démarrer sur cet appareil : les '
+                'salons chiffrés sont illisibles et l’envoi y est bloqué.',
+                style: TextStyle(
+                  fontSize: 13.5,
+                  height: 1.35,
+                  color: WaPalette.textPrimary,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: onRetry,
+              child: const Text('Réessayer'),
             ),
           ],
         ),

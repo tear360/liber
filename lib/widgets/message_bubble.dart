@@ -54,6 +54,7 @@ class MessageBubble extends StatelessWidget {
     this.replySender,
     this.replyText,
     this.edited = false,
+    this.onTapLock,
   });
 
   final String body;
@@ -78,6 +79,10 @@ class MessageBubble extends StatelessWidget {
 
   /// True when a later edit by the same author replaced the original text.
   final bool edited;
+
+  /// Set on a bubble the SDK could not decrypt: the bubble becomes tappable
+  /// and explains which key is missing instead of leaving a bare padlock.
+  final VoidCallback? onTapLock;
 
   @override
   Widget build(BuildContext context) {
@@ -217,7 +222,7 @@ class MessageBubble extends StatelessWidget {
       ),
     );
 
-    return Padding(
+    final padded = Padding(
       padding: EdgeInsets.only(
         top: 2,
         bottom: 2,
@@ -225,8 +230,7 @@ class MessageBubble extends StatelessWidget {
         right: isMine ? 4 : 64,
       ),
       child: Row(
-        mainAxisAlignment:
-            isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Flexible(
@@ -259,6 +263,13 @@ class MessageBubble extends StatelessWidget {
           ),
         ],
       ),
+    );
+
+    if (onTapLock == null) return padded;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTapLock,
+      child: padded,
     );
   }
 

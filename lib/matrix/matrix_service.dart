@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../diagnostics.dart';
 import '../notifications/notification_service.dart';
 
 /// Owns the single [Client] for the process: opening the local store,
@@ -65,6 +66,68 @@ class MatrixService extends ChangeNotifier {
   /// recovery key alone can unlock the messages on this device.
   bool get recoveryKeyAvailable =>
       _client?.encryption?.ssss.defaultKeyId != null;
+
+  /// Every device the account knows about, this one first when it is in the
+  /// list. This is the "historique des connexions" view: each entry is a
+  /// session that can read the account's encrypted messages.
+  List<DeviceKeys> get accountDevices {
+    final client = _client;
+    final userId = client?.userID;
+    if (client == null || userId == null) return const [];
+    final own = client.userDeviceKeys[userId]?.deviceKeys.values ??
+        const <DeviceKeys>[];
+    final devices = own.where((d) => d.isValid).toList()
+      ..sort((a, b) {
+        final aMine = a.deviceId == client.deviceID;
+        final bMine = b.deviceId == client.deviceID;
+        if (aMine != bMine) return aMine ? -1 : 1;
+        return (a.deviceDisplayName ?? a.deviceId ?? '')
+            .toLowerCase()
+            .compareTo((b.deviceDisplayName ?? b.deviceId ?? '').toLowerCase());
+      });
+    return devices;
+  }
+
+  /// Marks one device of the account as trusted on the server. Peers then
+  /// share the room keys with it, which is what makes messages readable.
+  Future<void> markDeviceVerified(DeviceKeys device) async {
+    Diagnostics.instance
+        .add('Appareil ${device.deviceId} marqué comme vérifié');
+    await device.setVerified(true);
+    notifyListeners();
+  }
+
+  /// Drops the trust placed in one device.
+  Future<void> markDeviceUnverified(DeviceKeys device) async {
+    Diagnostics.instance
+        .add('Appareil ${device.deviceId} marqué comme non vérifié');
+    await device.setVerified(false);
+    notifyListeners();
+  }
+
+  /// Stops trusting a device outright: it is blocked and its keys are
+  /// ignored from then on.
+  Future<void> blockDevice(DeviceKeys device) async {
+    Diagnostics.instance.add('Appareil ${device.deviceId} bloqué');
+    await device.setBlocked(true);
+    notifyListeners();
+  }
+
+  /// Human-readable reason why a session cannot read the encrypted history
+  /// on this device, or `null` when everything is in place.
+  String? get encryptionStatus {
+    final client = _client;
+    if (client == null) return 'Aucune session ouverte.';
+    if (!encryptionEnabled) {
+      return 'Le chiffrement n’a pas pu démarrer sur cet appareil : les '
+          'messages chiffrés restent illisibles.';
+    }
+    if (!sessionVerified) {
+      return 'Cet appareil n’est pas vérifié : les messages chiffrés reçus '
+          'avant son ajout restent verrouillés.';
+    }
+    return null;
+  }
 
   /// True once the megolm backup key is cached, meaning the room keys stored
   /// in the server-side backup can be downloaded without another device.
@@ -137,10 +200,15 @@ class MatrixService extends ChangeNotifier {
   /// matrix.org), the request falls through to the account's other devices.
   /// That second path is what makes the history readable after a
   /// verification.
-  Future<void> requestMissingKeys() async {
+  Future<void> requestMissingKeys({bool force = false}) async {
     final client = _client;
     final encryption = client?.encryption;
     if (client == null || encryption == null) return;
+
+    // Requests sent before the account trusted this device are refused by the
+    // peers; without clearing the dedup set here they would never be asked
+    // again and the history would stay locked forever.
+    if (force) _requestedSessions.clear();
 
     for (final room in client.rooms) {
       if (room.isSpace || room.membership == Membership.leave) continue;
@@ -161,6 +229,7 @@ class MatrixService extends ChangeNotifier {
       final key = '${room.id}|$sessionId';
       if (!_requestedSessions.add(key)) continue;
 
+      Diagnostics.instance.add('Clé demandée pour ${room.getLocalizedDisplayname()}');
       unawaited(_requestSessionKey(room, sessionId, senderKey, encryption));
     }
     notifyListeners();
@@ -219,21 +288,53 @@ class MatrixService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Builds the [Client] with everything the app wires around it. Called
+  /// once at bootstrap and again by [recoverCrypto], which has to rebuild
+  /// the client from scratch because `Client.init()` refuses to run twice.
+  Client _createClient(MatrixSdkDatabase database) {
+    // Without declaring the methods this client supports, the SDK
+    // silently drops every incoming key-verification request — which is
+    // why "verify this device" prompts never appeared in the app.
+    final client = Client(
+      clientName,
+      database: database,
+      verificationMethods: const {
+        KeyVerificationMethod.emoji,
+        KeyVerificationMethod.numbers,
+      },
+    );
+
+    // Every event the account's push rules want to announce becomes a
+    // system notification while the app is in the background.
+    NotificationService.bind(client);
+
+    client.onLoginStateChanged.stream.listen((state) {
+      if (state == LoginState.loggedIn) _error = null;
+      notifyListeners();
+    });
+    return client;
+  }
+
   /// Opens the local database and, when one exists, resumes the previous
   /// session. Safe to call more than once.
   Future<void> bootstrap() async {
     if (_bootstrapped) return;
     _busy = true;
     notifyListeners();
+    Diagnostics.instance.attachSdkLogs();
 
     try {
       try {
         await vodozemac.init();
         _e2eeReady = true;
-      } catch (_) {
+        Diagnostics.instance.add('Chiffrement (vodozemac) démarré');
+      } catch (e) {
         // No encryption is a degraded experience, not a fatal error: plain
         // rooms still work, so the app carries on.
         _e2eeReady = false;
+        Diagnostics.instance.add(
+          'AVERTISSEMENT : le chiffrement n’a pas pu démarrer — $e',
+        );
       }
 
       final docs = await getApplicationDocumentsDirectory();
@@ -244,39 +345,21 @@ class MatrixService extends ChangeNotifier {
         sqfliteFactory: databaseFactory,
       );
 
-      // Without declaring the methods this client supports, the SDK
-      // silently drops every incoming key-verification request — which is
-      // why "verify this device" prompts never appeared in the app.
-      final client = Client(
-        clientName,
-        database: matrixDatabase,
-        verificationMethods: const {
-          KeyVerificationMethod.emoji,
-          KeyVerificationMethod.numbers,
-        },
-      );
-      _client = client;
-
-      // Every event the account's push rules want to announce becomes a
-      // system notification while the app is in the background.
-      NotificationService.bind(client);
-
-      client.onLoginStateChanged.stream.listen((state) {
-        if (state == LoginState.loggedIn) _error = null;
-        notifyListeners();
-      });
+      _client = _createClient(matrixDatabase);
 
       // `getClient` returns null on a fresh install, so init() is only called
       // when there is actually a stored session to resume.
       final stored = await matrixDatabase.getClient(clientName);
       if (stored != null) {
         try {
-          await client.init();
-          if (client.isLogged()) {
+          await clientSafeInit();
+          if (_client?.isLogged() ?? false) {
             unawaited(NotificationService.requestPermission());
+            unawaited(refreshDeviceKeys());
           }
         } catch (e) {
           _error = describeMatrixError(e);
+          Diagnostics.instance.add('Reprise de session impossible — $e');
         }
       }
     } catch (e) {
@@ -285,6 +368,166 @@ class MatrixService extends ChangeNotifier {
       _busy = false;
       _bootstrapped = true;
       notifyListeners();
+    }
+  }
+
+  /// `Client.init()` with the encryption state recorded in the journal, so a
+  /// silent crypto failure (the cause of "every message stays locked") is
+  /// visible in the diagnostic log instead of only in a debugger.
+  Future<void> clientSafeInit() async {
+    await _client?.init();
+    final encryption = _client?.encryption;
+    if (_client?.isLogged() ?? false) {
+      Diagnostics.instance.add(
+        encryption == null
+            ? 'Session reprise SANS chiffrement : les salons chiffrés seront '
+                'illisibles et l’envoi y sera bloqué.'
+            : 'Session reprise avec chiffrement actif',
+      );
+    }
+  }
+
+  /// Reloading the native crypto library after a failed start.
+  ///
+  /// `_encryption` is only built inside `Client.init()`, which cannot run a
+  /// second time on a logged-in client — so the way back is a fresh client
+  /// resumed from the same stored session, once the library loads.
+  Future<bool> recoverCrypto() async {
+    if (_client?.encryption != null) return true;
+    final wasLoggedIn = _client?.isLogged() ?? false;
+    Diagnostics.instance.add(
+      'Nouvel essai de démarrage du chiffrement'
+      '${wasLoggedIn ? ' (session conservée)' : ''}',
+    );
+    try {
+      await vodozemac.init();
+      _e2eeReady = true;
+    } catch (e) {
+      Diagnostics.instance.add(
+        'Bibliothèque de chiffrement toujours indisponible — $e',
+      );
+      return false;
+    }
+    if (!wasLoggedIn) return false;
+
+    final previous = _client;
+    try {
+      _client = null;
+      await previous?.dispose();
+      final docs = await getApplicationDocumentsDirectory();
+      final database = await openDatabase(p.join(docs.path, 'liber.db'));
+      final matrixDatabase = await MatrixSdkDatabase.init(
+        clientName,
+        database: database,
+        sqfliteFactory: databaseFactory,
+      );
+      final client = _createClient(matrixDatabase);
+      _client = client;
+      final stored = await matrixDatabase.getClient(clientName);
+      if (stored == null) return false;
+      await client.init();
+      final ok = client.encryption != null;
+      Diagnostics.instance.add(
+        ok
+            ? 'Chiffrement actif après reconstruction du client'
+            : 'Le chiffrement reste inactif après reconstruction',
+      );
+      if (ok) {
+        unawaited(NotificationService.requestPermission());
+        unawaited(refreshDeviceKeys());
+      }
+      notifyListeners();
+      return ok;
+    } catch (e) {
+      Diagnostics.instance.add('Reconstruction du client impossible — $e');
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Starts an emoji verification against one specific device of the account
+  /// (own devices and contacts alike). Returns the request so the caller can
+  /// drive the comparison screen, and asks for the room keys afterwards.
+  Future<KeyVerification> startDeviceVerification(DeviceKeys device) async {
+    await refreshDeviceKeys();
+    final request = await device.startVerification();
+    Diagnostics.instance
+        .add('Vérification demandée à l’appareil ${device.deviceId}');
+    return request;
+  }
+
+  /// Starts the verification this screen needs: with one other device on the
+  /// account it targets that device, otherwise the account's own cross-signing
+  /// key.
+  ///
+  /// The device list is fetched first. The SDK cancels an incoming request it
+  /// cannot resolve to a known device (`im.fluffychat.unknown_device`), which
+  /// used to make every attempt look like the other side had refused it.
+  Future<KeyVerification> startSelfVerification() async {
+    await refreshDeviceKeys();
+    final client = _client;
+    final userId = client?.userID;
+    if (client == null || userId == null) {
+      throw MatrixServiceException('Aucune session ouverte.');
+    }
+    final keyList = client.userDeviceKeys[userId];
+    if (keyList == null) {
+      throw MatrixServiceException(
+        'Les clés de votre compte ne sont pas encore disponibles : '
+        'réessayez dans un instant.',
+      );
+    }
+    Diagnostics.instance.add('Vérification du compte démarrée');
+    return keyList.startVerification();
+  }
+
+  /// Connection history as the homeserver sees it: for every session, the
+  /// last IP address and the last time it talked to the server. Filled by
+  /// [refreshConnectionHistory] and read by the Sécurité screen.
+  List<Device> serverSessions = const [];
+
+  /// Fetches the server-side session list (`GET /_matrix/client/v3/devices`),
+  /// which carries `last_seen_ip` and `last_seen_ts` — the true connection
+  /// history, unlike the SDK's local `lastActive` guess.
+  Future<void> refreshConnectionHistory() async {
+    final client = _client;
+    if (client == null || client.userID == null) return;
+    try {
+      final devices = await client.getDevices();
+      serverSessions = devices ?? const [];
+      Diagnostics.instance.add(
+        'Historique des connexions : ${serverSessions.length} session(s)',
+      );
+      notifyListeners();
+    } catch (e) {
+      Diagnostics.instance.add('Historique des connexions impossible — $e');
+    }
+  }
+
+  /// The server-side record for [deviceId], if the history was fetched.
+  Device? serverSessionFor(String? deviceId) {
+    if (deviceId == null) return null;
+    for (final session in serverSessions) {
+      if (session.deviceId == deviceId) return session;
+    }
+    return null;
+  }
+
+  /// Refreshes the account's device list. A fresh session that has not
+  /// queried device keys yet cancels every incoming verification request it
+  /// does not recognise (`im.fluffychat.unknown_device`), which is why a
+  /// verification started from another device could do nothing here.
+  Future<void> refreshDeviceKeys() async {
+    final client = _client;
+    if (client == null || client.userID == null) return;
+    try {
+      await client.updateUserDeviceKeys();
+      final count =
+          client.userDeviceKeys[client.userID]?.deviceKeys.length ?? 0;
+      Diagnostics.instance.add('Liste des appareils du compte : $count');
+      notifyListeners();
+    } catch (e) {
+      Diagnostics.instance.add('Liste des appareils impossible — $e');
     }
   }
 

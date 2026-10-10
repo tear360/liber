@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:matrix/encryption.dart';
+import 'package:matrix/matrix.dart';
 
+import '../diagnostics.dart';
 import '../matrix/matrix_service.dart';
 import '../theme.dart';
 
@@ -52,15 +54,38 @@ class _VerificationScreenState extends State<VerificationScreen> {
 
   void _onUpdate() {
     if (mounted) setState(() {});
+    Diagnostics.instance
+        .add('Vérification : état ${_request.state.name}');
     // The account now trusts this device: nobody pushes the old room keys on
-    // their own, so ask for them (backup first, then the other devices).
+    // their own, so ask for them now (backup first, then the other devices).
+    // Forced: the requests sent while this device was unverified were refused
+    // by the peers, and the dedup set must not block the retry.
     if (_request.state == KeyVerificationState.done && !_keysRequested) {
       _keysRequested = true;
-      unawaited(MatrixService.instance.requestMissingKeys());
+      unawaited(MatrixService.instance.requestMissingKeys(force: true));
     }
   }
 
   bool _keysRequested = false;
+
+  /// Both sides answered "ready": the SDK now waits for one of us to pick a
+  /// comparison method. Tapping "Accepter" again here would make
+  /// [KeyVerification.acceptVerification] bail out with `m.unexpected_message`
+  /// — the verification then dies and the other side reports it as "annulée",
+  /// over and over. Sending the SAS start is the only valid move.
+  Future<void> _continueSas() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await _request.continueVerification(EventTypes.Sas);
+    } catch (e) {
+      setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _accept() async {
     setState(() {
@@ -111,6 +136,8 @@ class _VerificationScreenState extends State<VerificationScreen> {
   }
 
   void _cancel() {
+    _userCancelled = true;
+    Diagnostics.instance.add('Vérification annulée par cet appareil');
     unawaited(_request.cancel('m.user', true));
     Navigator.of(context).pop();
   }
@@ -152,8 +179,9 @@ class _VerificationScreenState extends State<VerificationScreen> {
       case KeyVerificationState.askSSSS:
         return _buildSsssForm();
       case KeyVerificationState.askAccept:
-      case KeyVerificationState.askChoice:
         return _buildAccept();
+      case KeyVerificationState.askChoice:
+        return _buildChoice();
       case KeyVerificationState.waitingAccept:
         return _buildWaiting(
           'En attente de l\'autre appareil…',
@@ -253,6 +281,54 @@ class _VerificationScreenState extends State<VerificationScreen> {
           onPressed: _busy ? null : _cancel,
           child: const Text('Refuser'),
         ),
+      ],
+    );
+  }
+
+  /// The "choose a method" step: with emoji/numbers-only support this is a
+  /// single button that starts the SAS comparison.
+  Widget _buildChoice() {
+    final canSas = _request.possibleMethods.contains(EventTypes.Sas);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _Header(
+          icon: Icons.emoji_emotions_outlined,
+          title: 'Choisissez la comparaison',
+          text: 'Les deux appareils sont d’accord pour vérifier la connexion. '
+              'Comparez les émojis affichés sur les deux écrans.',
+        ),
+        if (!canSas)
+          const _Header(
+            icon: Icons.error_outline,
+            title: 'Aucune méthode commune',
+            text: "L’autre appareil ne propose ni émojis ni numéros : mettez "
+                'à jour ses deux applications puis réessayez.',
+            iconColor: Color(0xFFD33B3B),
+          )
+        else
+          FilledButton(
+            onPressed: _busy ? null : _continueSas,
+            child: _busy
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('Comparer les émojis'),
+          ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: _busy ? null : _cancel,
+          child: const Text('Annuler'),
+        ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Text(
+              _error!,
+              style: const TextStyle(color: Color(0xFFB3261E), fontSize: 13),
+            ),
+          ),
       ],
     );
   }
@@ -359,15 +435,15 @@ class _VerificationScreenState extends State<VerificationScreen> {
   }
 
   Widget _buildError() {
+    final reason = _canceledReasonText(_request.canceledCode);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _Header(
+        _Header(
           icon: Icons.error_outline,
-          title: 'Vérification annulée',
-          text: 'La vérification a échoué ou a été refusée sur l\'autre '
-              'appareil. Vous pouvez réessayer.',
-          iconColor: Color(0xFFD33B3B),
+          title: 'Vérification interrompue',
+          text: '$_bannerReason $reason',
+          iconColor: const Color(0xFFD33B3B),
         ),
         FilledButton(
           onPressed: () => Navigator.of(context).pop(),
@@ -375,6 +451,50 @@ class _VerificationScreenState extends State<VerificationScreen> {
         ),
       ],
     );
+  }
+
+  /// The line shown above the reason, depending on which side gave up first.
+  String get _bannerReason {
+    if (_request.canceledCode == 'm.user' && !_userCancelled) {
+      return 'L’autre appareil a refusé ou a fermé la comparaison.';
+    }
+    return 'La vérification n’a pas abouti.';
+  }
+
+  /// True once the local user closed this screen themselves, so the message
+  /// does not blame the other side.
+  bool _userCancelled = false;
+
+  /// Turns the SDK's cancel codes into something the user can act on. The
+  /// raw code is kept in the journal either way.
+  static String _canceledReasonText(String? code) {
+    switch (code) {
+      case null:
+        return 'Aucune raison n’a été transmise.';
+      case 'm.user':
+        return '';
+      case 'm.timeout':
+        return 'Personne n’a répondu à temps : la demande a expiré.';
+      case 'm.unknown_method':
+        return 'Les deux appareils n’offrent aucun mode de comparaison en '
+            'commun.';
+      case 'm.key_mismatch':
+        return 'Les empreintes affichées ne correspondaient pas : '
+            'vérification abandonnée par sécurité.';
+      case 'im.fluffychat.unknown_device':
+        return 'Cet appareil ne connaissait pas encore les clés de l’autre '
+            'session. Attendez quelques secondes que la liste des appareils '
+            'se rafraîchisse, puis relancez la vérification.';
+      case 'm.accepted':
+        return 'La vérification a été terminée côté autre appareil.';
+      case 'm.invalid_message':
+      case 'm.unexpected_message':
+        return 'Un message inattendu a été reçu pendant la comparaison.';
+      case 'm.invalid_key':
+        return 'La clé reçue était invalide.';
+      default:
+        return 'Code renvoyé : $code.';
+    }
   }
 }
 

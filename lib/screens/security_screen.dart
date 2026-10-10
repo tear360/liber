@@ -5,8 +5,10 @@ import 'package:flutter/services.dart';
 import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 
+import '../diagnostics.dart';
 import '../matrix/matrix_service.dart';
 import '../theme.dart';
+import '../widgets/device_row.dart';
 import 'verification_screen.dart';
 
 /// « Sécurité des messages » : the single place where the encrypted history
@@ -40,6 +42,8 @@ class _SecurityScreenState extends State<SecurityScreen> {
   bool _verifying = false;
   bool _restoring = false;
   bool _keysUnlocked = false;
+  bool _refreshingDevices = false;
+  String? _verifyingDeviceId;
   String? _error;
   String? _status;
 
@@ -49,6 +53,9 @@ class _SecurityScreenState extends State<SecurityScreen> {
   void initState() {
     super.initState();
     unawaited(_refreshKeyState());
+    // The server-side connection history (last IP, last seen) is a separate
+    // endpoint from the device keys, so it is fetched alongside them.
+    unawaited(_service.refreshConnectionHistory());
   }
 
   @override
@@ -62,36 +69,82 @@ class _SecurityScreenState extends State<SecurityScreen> {
     if (mounted) setState(() => _keysUnlocked = unlocked);
   }
 
-  /// Starts an emoji verification with the account's other sessions, which is
-  /// what marks this device as trusted on the server.
-  Future<void> _startVerification() async {
-    final client = _client;
-    final userId = client?.userID;
-    if (client == null || userId == null || _verifying) return;
+  String get _journalText {
+    final text = Diagnostics.instance.snapshot().trim();
+    return text.isEmpty
+        ? 'Le journal est vide pour l’instant.'
+        : text;
+  }
 
-    final keyList = client.userDeviceKeys[userId];
-    if (keyList == null) {
-      setState(
-        () => _error =
-            "Les clés de votre compte ne sont pas encore disponibles. "
-            'Réessayez dans un instant.',
-      );
-      return;
-    }
+  Future<void> _copyJournal() async {
+    await Clipboard.setData(ClipboardData(text: Diagnostics.instance.snapshot()));
+    if (!mounted) return;
+    setState(() => _status = 'Journal copié : collez-le dans votre message.');
+  }
 
+  Future<void> _refreshDevices() async {
+    setState(() => _refreshingDevices = true);
+    await _service.refreshDeviceKeys();
+    await _service.refreshConnectionHistory();
+    if (mounted) setState(() => _refreshingDevices = false);
+  }
+
+  /// Verifies one specific device of the account over an emoji comparison.
+  Future<void> _verifyDevice(DeviceKeys device) async {
+    if (_verifyingDeviceId != null) return;
     setState(() {
-      _verifying = true;
+      _verifyingDeviceId = device.deviceId;
       _error = null;
+      _status = null;
     });
 
     KeyVerification? request;
     try {
-      request = await keyList.startVerification();
+      request = await _service.startDeviceVerification(device);
+      if (!mounted) return;
+      await VerificationScreen.open(context, request);
+      await _service.requestMissingKeys(force: true);
+      await _refreshKeyState();
+    } catch (e) {
+      if (mounted) {
+        setState(
+          () => _error = 'Vérification impossible : '
+              '${MatrixService.describeMatrixError(e)}',
+        );
+      }
+      try {
+        await request?.cancel('m.user', true);
+      } catch (_) {
+        // The other side may already have closed the request.
+      }
+    } finally {
+      if (mounted) setState(() => _verifyingDeviceId = null);
+    }
+  }
+
+  /// Starts an emoji verification with the account's other sessions, which is
+  /// what marks this device as trusted on the server.
+  Future<void> _startVerification() async {
+    if (_verifying) return;
+
+    setState(() {
+      _verifying = true;
+      _error = null;
+      _status = null;
+    });
+
+    KeyVerification? request;
+    try {
+      // The service refreshes the device list first: an incoming request the
+      // other side cannot resolve to a known device is cancelled outright,
+      // which used to read as "the verification was refused".
+      request = await _service.startSelfVerification();
       if (!mounted) return;
       await VerificationScreen.open(context, request);
       // Verification alone never copies the old room keys: ask for them now
-      // that the account trusts this device.
-      await _service.requestMissingKeys();
+      // that the account trusts this device. Forced, because any request sent
+      // while the device was unverified was refused by the peers.
+      await _service.requestMissingKeys(force: true);
       await _refreshKeyState();
     } catch (e) {
       if (mounted) {
@@ -149,6 +202,8 @@ class _SecurityScreenState extends State<SecurityScreen> {
         client != null && userId != null && client.encryption != null;
     final hasRecoveryKey = _service.recoveryKeyAvailable;
     final canRestore = !_restoring && _recoveryController.text.trim().isNotEmpty;
+    final cryptoReady = _service.encryptionEnabled;
+    final devices = _service.accountDevices;
 
     return Scaffold(
       backgroundColor: WaPalette.surface,
@@ -301,6 +356,11 @@ class _SecurityScreenState extends State<SecurityScreen> {
             // ---- Status --------------------------------------------------
             const _SectionTitle('État'),
             _StatusRow(
+              label: 'Chiffrement de cet appareil',
+              value: cryptoReady ? 'Actif' : 'Inactif',
+              ok: cryptoReady,
+            ),
+            _StatusRow(
               label: 'Cet appareil',
               value: verified ? 'Vérifié' : 'Non vérifié',
               ok: verified,
@@ -314,6 +374,109 @@ class _SecurityScreenState extends State<SecurityScreen> {
               label: 'Clés de discussion',
               value: _keysUnlocked ? 'Déverrouillées' : 'Verrouillées',
               ok: _keysUnlocked,
+            ),
+
+            const SizedBox(height: 28),
+
+            // ---- Devices -------------------------------------------
+            const _SectionTitle('Appareils et sessions'),
+            const _Explanation(
+              'Historique des connexions : chaque session connectée à votre '
+              'compte peut lire ses messages chiffrés, avec sa dernière adresse '
+              'IP vue par le serveur. Vérifiez celles que vous reconnaissez.',
+            ),
+            if (devices.isEmpty)
+              const _Explanation('Aucun appareil connu pour le moment.')
+            else
+              Container(
+                decoration: BoxDecoration(
+                  color: WaPalette.notice,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    for (var i = 0; i < devices.length; i++) ...[
+                      if (i > 0)
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                      DeviceRow(
+                        device: devices[i],
+                        serverSession:
+                            _service.serverSessionFor(devices[i].deviceId),
+                        isThisDevice:
+                            devices[i].deviceId == client?.deviceID,
+                        verifying:
+                            _verifyingDeviceId == devices[i].deviceId,
+                        onVerify: () => _verifyDevice(devices[i]),
+                        onMarkVerified: () =>
+                            _service.markDeviceVerified(devices[i]),
+                        onMarkUnverified: () =>
+                            _service.markDeviceUnverified(devices[i]),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: _refreshingDevices
+                  ? null
+                  : () => unawaited(_refreshDevices()),
+              icon: _refreshingDevices
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh, size: 18),
+              label: const Text('Rafraîchir la liste'),
+            ),
+
+            const SizedBox(height: 28),
+
+            // ---- Journal --------------------------------------------
+            const _SectionTitle('Journal de diagnostic'),
+            const _Explanation(
+              'Les dernières étapes du chiffrement et des vérifications, '
+              'telles que l’application les a vues. Copiez-les pour '
+              'diagnostiquer un problème à distance.',
+            ),
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              constraints: const BoxConstraints(maxHeight: 200),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF2F2F2),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFDDDDDD)),
+              ),
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  _journalText,
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    height: 1.4,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton.icon(
+                  onPressed: () => setState(() {}),
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: const Text('Actualiser'),
+                ),
+                const SizedBox(width: 4),
+                FilledButton.tonalIcon(
+                  onPressed: () => unawaited(_copyJournal()),
+                  icon: const Icon(Icons.copy, size: 18),
+                  label: const Text('Copier'),
+                ),
+              ],
             ),
           ],
         ),
